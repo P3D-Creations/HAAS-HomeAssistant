@@ -1,0 +1,12 @@
+{
+  "domain": "haas_cnc",
+  "name": "HAAS CNC Machine Monitor",
+  "version": "1.0.0",
+  "documentation": "https://github.com/yourusername/HAAS-HomeAssistant",
+  "issue_tracker": "https://github.com/yourusername/HAAS-HomeAssistant/issues",
+  "requirements": [],
+  "dependencies": ["mqtt"],
+  "codeowners": [],
+  "iot_class": "local_push",
+  "config_flow": true
+}

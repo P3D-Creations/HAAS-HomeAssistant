@@ -1,0 +1,65 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HAAS CNC Machine Monitor",
+        "description": "Configure connection to your HAAS machine via the Haas MQTT MTConnect Adapter.\n\nEnsure your MQTT broker is configured in Home Assistant and the adapter is running.",
+        "data": {
+          "machine_name": "Machine Name",
+          "topic_prefix": "MQTT Topic Prefix"
+        },
+        "data_description": {
+          "machine_name": "A friendly name for your CNC machine (e.g. HAAS UMC500).",
+          "topic_prefix": "The MQTT topic prefix used by the adapter (default: haas/minimill/)."
+        }
+      }
+    },
+    "error": {
+      "mqtt_not_available": "MQTT integration is not available. Please configure MQTT in Home Assistant first."
+    },
+    "abort": {
+      "already_configured": "A machine with this topic prefix is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HAAS CNC Options",
+        "data": {
+          "topic_prefix": "MQTT Topic Prefix"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "execution": { "name": "Execution State" },
+      "mode": { "name": "Operating Mode" },
+      "program": { "name": "Active Program" },
+      "part_count": { "name": "Part Count" },
+      "x_act": { "name": "X Position" },
+      "y_act": { "name": "Y Position" },
+      "z_act": { "name": "Z Position" },
+      "a_act": { "name": "A Axis Position" },
+      "b_act": { "name": "B Axis Position" },
+      "speed": { "name": "Spindle Speed" },
+      "load": { "name": "Spindle Load" },
+      "coolant_level": { "name": "Coolant Level" },
+      "air_pressure": { "name": "Air Pressure" },
+      "tool": { "name": "Tool in Spindle" },
+      "tool_length": { "name": "Tool Length Offset" },
+      "tool_diameter": { "name": "Tool Diameter Offset" },
+      "work_offset": { "name": "Active Work Offset" },
+      "alarm": { "name": "Alarm" },
+      "alarm_code": { "name": "Alarm Code" },
+      "cycle_time": { "name": "Cycle Time" },
+      "run_time": { "name": "Run Time" },
+      "adapter_timestamp": { "name": "Adapter Timestamp" }
+    },
+    "binary_sensor": {
+      "available": { "name": "Machine Available" },
+      "running": { "name": "Running" },
+      "alarm_active": { "name": "Alarm Active" }
+    }
+  }
+}

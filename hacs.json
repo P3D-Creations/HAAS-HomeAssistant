@@ -1,0 +1,7 @@
+{
+  "name": "HAAS CNC Machine Monitor",
+  "content_in_root": false,
+  "zip_release": false,
+  "filename": "haas_cnc.zip",
+  "render_readme": true
+}
