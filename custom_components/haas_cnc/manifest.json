@@ -1,7 +1,7 @@
 {
   "domain": "haas_cnc",
   "name": "HAAS CNC Machine Monitor",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "documentation": "https://github.com/P3D-Creations/HAAS-HomeAssistant",
   "issue_tracker": "https://github.com/P3D-Creations/HAAS-HomeAssistant/issues",
   "requirements": [
