@@ -1,7 +1,7 @@
 {
   "domain": "haas_cnc",
   "name": "HAAS CNC",
-  "version": "2.1.4",
+  "version": "2.1.5",
   "documentation": "https://github.com/P3D-Creations/HAAS-HomeAssistant",
   "issue_tracker": "https://github.com/P3D-Creations/HAAS-HomeAssistant/issues",
   "requirements": [
