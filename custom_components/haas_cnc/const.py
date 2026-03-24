@@ -163,7 +163,7 @@ MACRO_OPT_STOP = 3033             # Optional stop status (0 = off, 1 = on)
 # -- Medium tier macros (read every ~10 s) --
 MACRO_TOOL_IN_SPINDLE = 3026      # Current tool number (T)
 MACRO_PART_COUNT = 3901           # M30 count (parts)
-MACRO_WORK_OFFSET_GROUP = 4014    # Active work offset group (54=G54, etc.)
+MACRO_WORK_OFFSET_GROUP = 4012    # Active work offset group (54=G54, etc.)
 MACRO_LAST_ALARM = None           # Last alarm number
 
 # -- Slow tier macros (read every ~600 s) --
