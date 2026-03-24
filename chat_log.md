@@ -137,6 +137,40 @@ HACS configuration, automated release pipeline, integration icons, and log revie
 - [ ] Create Lovelace dashboard UI (cards and views)
 - [ ] Implement estimated remaining time logic as a HA template sensor
 - [ ] Add maintenance alert monitoring via machine parameter polling
-- [ ] Submit brand images to `home-assistant/brands` repository for official HA UI icon support
+- [x] Submit brand images to `home-assistant/brands` repository for official HA UI icon support
 - [ ] Address datron_next axis timeout and cartridge issues (separate workspace/project)
 - [ ] Install haas_cnc on HA instance and verify MQTT connectivity
+
+---
+
+## Session 3 – 2026-03-24
+
+### Summary
+
+Replaced generated icons with official HAAS logo; confirmed auto-release workflow already functional.
+
+### Request
+
+> 1. Automate release on push (already done in session 2)
+> 2. Use attached official HAAS logo for icons; ensure brand images are correct for HA
+
+### Actions Taken
+
+1. **Auto-release** – Confirmed the workflow from session 2 is already in place. No changes needed.
+
+2. **Official HAAS logo** – Replaced the previously generated icons with the real HAAS logo:
+   - Source: `Haas-Logo-Single-01-1136046903.png` (1800×1800 RGBA)
+   - Resized using Pillow (LANCZOS resampling) into HA brand format:
+     - `icon.png` (256×256), `icon@2x.png` (512×512)
+     - `logo.png` (256×256), `logo@2x.png` (512×512)
+   - Placed in `custom_components/haas_cnc/` (where HA custom integrations load brand images)
+   - Also placed in repo root (HACS displays from here)
+   - Added source PNG to `.gitignore` (large file, only resized versions committed)
+   - Updated `generate_icons.py` to resize from source instead of drawing
+
+### Next Steps
+
+- [ ] Expand the MQTT adapter with extended macro variables
+- [ ] Create Lovelace dashboard UI
+- [ ] Install haas_cnc on HA instance and verify MQTT connectivity
+- [ ] Address datron_next issues (separate workspace)

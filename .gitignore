@@ -40,3 +40,6 @@ secrets.yaml
 *.env
 .env.*
 !.env.example
+
+# Large source assets (resized copies are committed)
+Haas-Logo-Single-01-1136046903.png
