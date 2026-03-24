@@ -111,6 +111,60 @@ MACRO_WORK_OFFSET_BASE = 5221            # G54 X,Y,Z,A,B,C (#5221-#5226)
 MACRO_POSITION_START = 5021              # Current position #5021-#5026
 
 # ---------------------------------------------------------------------------
+# Macro variable → sensor mapping  (?Q600 reads)
+# ---------------------------------------------------------------------------
+# Edit these to match your HAAS controller.  Set a value to None (or 0)
+# to skip reading that variable.  All variables are read with ?Q600 <var>.
+#
+# Reference for HAAS NGC controllers:
+#   #1094  = Coolant level (%)
+#   #1098  = Spindle load (%)
+#   #3001  = Power-on timer (milliseconds)
+#   #3002  = Cycle-start timer (ms) — time the cycle has been running
+#   #3003  = Last complete program number (Onnnnn)
+#   #3012  = Last alarm number
+#   #3026  = Part count (M30 count)
+#   #3027  = Spindle RPM (actual)
+#   #3030  = Single-block mode (1 = on)
+#   #3033  = Coolant position (0 = off, 1 = on)
+#   #4001  = Active G-code group 1 (motion mode: 0/1/2/3)
+#   #4014  = Active work offset group (54–59 = G54–G59)
+#   #4119  = Programmed feedrate
+#   #4120  = Active tool number
+#   #5001  = Relative X position (work coords)  (#5001-#5005)
+#   #5021  = Machine X position (work coords)   (#5021-#5025)
+#   #5041  = Machine X position (machine coords) (#5041-#5045)
+#   #5221–#5226  = G54 work offset X,Y,Z,A,B,C
+#   #8550  = Tool in spindle (T number)
+#
+# NOTE: Different HAAS generations may use different variable numbers.
+#       Check your operator's manual or use MDI: #nnnnn to verify.
+# ---------------------------------------------------------------------------
+
+# -- Fast tier macros (read every ~2 s) --
+MACRO_X_WORK = 5021               # Current X position (work coordinates)
+MACRO_Y_WORK = 5022               # Current Y position
+MACRO_Z_WORK = 5023               # Current Z position
+MACRO_A_WORK = 5024               # Current A position
+MACRO_B_WORK = 5025               # Current B position
+MACRO_SPINDLE_SPEED = 3027        # Actual spindle RPM
+MACRO_SPINDLE_LOAD = 1098         # Spindle load %
+MACRO_FEEDRATE = 4119             # Programmed feedrate (mm/min or in/min)
+MACRO_COOLANT_LEVEL = 1094        # Coolant level %
+
+# -- Medium tier macros (read every ~10 s) --
+MACRO_TOOL_IN_SPINDLE = 8550      # Current tool number (T)
+MACRO_PART_COUNT = 3026           # M30 count (parts)
+MACRO_WORK_OFFSET_GROUP = 4014    # Active work offset group (54=G54, etc.)
+MACRO_LAST_ALARM = 3012           # Last alarm number
+
+# -- Slow tier macros (read every ~600 s) --
+MACRO_POWER_ON_TIME = 3001        # Power-on timer (milliseconds)
+MACRO_CYCLE_TIME = 3002           # Cycle-start timer (milliseconds)
+MACRO_MOTION_TIME = None          # Not available via standard macro; set to
+                                  # a variable number if your machine has one
+
+# ---------------------------------------------------------------------------
 # Extra entity attributes
 # ---------------------------------------------------------------------------
 ATTR_DATA_SOURCE = "data_source"        # "mtconnect" or "mdc"

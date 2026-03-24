@@ -52,6 +52,24 @@ from .const import (
     KEY_X_ACT,
     KEY_Y_ACT,
     KEY_Z_ACT,
+    MACRO_A_WORK,
+    MACRO_B_WORK,
+    MACRO_COOLANT_LEVEL,
+    MACRO_CYCLE_TIME,
+    MACRO_FEEDRATE,
+    MACRO_LAST_ALARM,
+    MACRO_MOTION_TIME,
+    MACRO_PART_COUNT,
+    MACRO_POWER_ON_TIME,
+    MACRO_SPINDLE_LOAD,
+    MACRO_SPINDLE_SPEED,
+    MACRO_TOOL_DIAM_GEOM_START,
+    MACRO_TOOL_IN_SPINDLE,
+    MACRO_TOOL_LENGTH_GEOM_START,
+    MACRO_WORK_OFFSET_GROUP,
+    MACRO_X_WORK,
+    MACRO_Y_WORK,
+    MACRO_Z_WORK,
     MDC_Q100,
     MDC_Q104,
     MDC_Q200,
@@ -669,14 +687,44 @@ class MDCClient:
         """Read a single macro variable via ?Q600 <var>."""
         raw = await self._send_command(f"{MDC_Q600} {variable}")
         if raw:
-            clean = raw.lstrip(">").strip()
-            parts = [p.strip() for p in clean.split(",")]
-            # Response is typically "> VARIABLE, VALUE" or just "> VALUE"
-            val_str = parts[-1] if parts else clean
-            if val_str.upper() in ("", "UNKNOWN", "VARIABLE"):
+            parts = _get_mdc_parts(raw)
+            # NGC: ">MACRO, 5021, VALUE, 12.345" or ">5021, 12.345"
+            # Classic: ">12.345"
+            # Try labeled first
+            for lbl in ("VALUE", "MACRO VALUE"):
+                for i, p in enumerate(parts):
+                    if p.upper() == lbl and i + 1 < len(parts):
+                        return _safe_float(parts[i + 1])
+            # Fall back to last numeric part
+            val_str = parts[-1] if parts else ""
+            if val_str.upper() in ("", "UNKNOWN", "VARIABLE", "MACRO"):
                 return None
             return _safe_float(val_str)
         return None
+
+    async def async_read_macros(
+        self, mapping: dict[str, int | None]
+    ) -> dict[str, Any]:
+        """Read multiple macro variables and return {key: value}.
+
+        *mapping* is ``{data_key: macro_variable_number}``.
+        Entries where the variable number is ``None`` or ``0`` are skipped.
+        """
+        # Filter to only valid variable numbers
+        to_read = {k: v for k, v in mapping.items() if v}
+        if not to_read:
+            return {}
+
+        # Gather all reads in parallel
+        keys = list(to_read.keys())
+        coros = [self.async_read_macro(to_read[k]) for k in keys]
+        results_raw = await asyncio.gather(*coros, return_exceptions=True)
+
+        out: dict[str, Any] = {}
+        for key, val in zip(keys, results_raw):
+            if isinstance(val, (int, float)):
+                out[key] = val
+        return out
 
     async def async_test_connection(self) -> bool:
         """Return True if the MDC interface responds to ?Q500."""
@@ -688,8 +736,10 @@ class MDCClient:
     # ------------------------------------------------------------------
 
     async def async_get_fast_data(self) -> dict[str, Any]:
-        """Query fast-changing data via MDC (status + positions)."""
+        """Query fast-changing data via MDC (status + positions + macros)."""
         results: dict[str, Any] = {}
+
+        # Run Q500 + Q300 in parallel
         q500, q300 = await asyncio.gather(
             self.async_q500(), self.async_q300(), return_exceptions=True
         )
@@ -697,11 +747,38 @@ class MDCClient:
             results.update(q500)
         if isinstance(q300, dict):
             results.update(q300)
+
+        # Fill any gaps from macro variables (const.py MACRO_* settings)
+        fast_macros: dict[str, int | None] = {}
+        if results.get(KEY_X_ACT) is None:
+            fast_macros[KEY_X_ACT] = MACRO_X_WORK
+        if results.get(KEY_Y_ACT) is None:
+            fast_macros[KEY_Y_ACT] = MACRO_Y_WORK
+        if results.get(KEY_Z_ACT) is None:
+            fast_macros[KEY_Z_ACT] = MACRO_Z_WORK
+        if results.get(KEY_A_ACT) is None:
+            fast_macros[KEY_A_ACT] = MACRO_A_WORK
+        if results.get(KEY_B_ACT) is None:
+            fast_macros[KEY_B_ACT] = MACRO_B_WORK
+        if results.get(KEY_SPINDLE_SPEED) is None:
+            fast_macros[KEY_SPINDLE_SPEED] = MACRO_SPINDLE_SPEED
+        if results.get(KEY_SPINDLE_LOAD) is None:
+            fast_macros[KEY_SPINDLE_LOAD] = MACRO_SPINDLE_LOAD
+        if results.get(KEY_PATH_FEEDRATE) is None:
+            fast_macros[KEY_PATH_FEEDRATE] = MACRO_FEEDRATE
+        if results.get(KEY_COOLANT_LEVEL) is None:
+            fast_macros[KEY_COOLANT_LEVEL] = MACRO_COOLANT_LEVEL
+
+        if fast_macros:
+            macro_vals = await self.async_read_macros(fast_macros)
+            results.update(macro_vals)
+
         return results
 
     async def async_get_medium_data(self) -> dict[str, Any]:
-        """Query medium-rate data via MDC (tool info, mode, alarm)."""
+        """Query medium-rate data via MDC (tool info, mode, alarm + macros)."""
         results: dict[str, Any] = {}
+
         q200, q104, q500 = await asyncio.gather(
             self.async_q200(),
             self.async_q104(),
@@ -721,11 +798,18 @@ class MDCClient:
 
         # Read active tool offsets if tool number known
         tool_num = results.get(KEY_TOOL_NUMBER)
+        if not tool_num and MACRO_TOOL_IN_SPINDLE:
+            # Fallback: read tool number from macro
+            macro_tool = await self.async_read_macro(MACRO_TOOL_IN_SPINDLE)
+            if macro_tool is not None:
+                tool_num = str(int(macro_tool))
+                results[KEY_TOOL_NUMBER] = tool_num
+
         if tool_num:
             try:
                 tool_idx = int(tool_num)
-                length_var = 2000 + tool_idx   # #2001 .. #2200
-                diam_var = 2400 + tool_idx     # #2401 .. #2600
+                length_var = MACRO_TOOL_LENGTH_GEOM_START - 1 + tool_idx
+                diam_var = MACRO_TOOL_DIAM_GEOM_START - 1 + tool_idx
                 l_val, d_val = await asyncio.gather(
                     self.async_read_macro(length_var),
                     self.async_read_macro(diam_var),
@@ -738,11 +822,41 @@ class MDCClient:
             except (ValueError, TypeError):
                 pass
 
+        # Fill remaining gaps from macros
+        med_macros: dict[str, int | None] = {}
+        if results.get(KEY_PART_COUNT) is None:
+            med_macros[KEY_PART_COUNT] = MACRO_PART_COUNT
+        if results.get(KEY_ALARM_CODE) is None:
+            med_macros[KEY_ALARM_CODE] = MACRO_LAST_ALARM
+        if results.get(KEY_WORK_OFFSET) is None:
+            med_macros[KEY_WORK_OFFSET] = MACRO_WORK_OFFSET_GROUP
+        if med_macros:
+            macro_vals = await self.async_read_macros(med_macros)
+            # Convert work offset group number to G-code string
+            wog = macro_vals.pop(KEY_WORK_OFFSET, None)
+            if wog is not None:
+                results[KEY_WORK_OFFSET] = f"G{int(wog)}"
+            results.update(macro_vals)
+
         return results
 
     async def async_get_slow_data(self) -> dict[str, Any]:
-        """Query slow-changing data via MDC (identity)."""
-        return await self.async_q100()
+        """Query slow-changing data via MDC (identity + timer macros)."""
+        results = await self.async_q100()
+
+        # Read accumulated timers from macros
+        slow_macros: dict[str, int | None] = {}
+        slow_macros[KEY_POWER_ON_TIME] = MACRO_POWER_ON_TIME
+        slow_macros[KEY_CYCLE_TIME] = MACRO_CYCLE_TIME
+        slow_macros[KEY_MOTION_TIME] = MACRO_MOTION_TIME
+        if slow_macros:
+            macro_vals = await self.async_read_macros(slow_macros)
+            # HAAS timers are in milliseconds → convert to seconds
+            for k in (KEY_POWER_ON_TIME, KEY_CYCLE_TIME, KEY_MOTION_TIME):
+                if k in macro_vals and macro_vals[k] is not None:
+                    results[k] = macro_vals[k] / 1000.0
+
+        return results
 
 
 # ======================================================================
