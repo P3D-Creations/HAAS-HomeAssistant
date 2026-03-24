@@ -1,15 +1,13 @@
 {
   "domain": "haas_cnc",
   "name": "HAAS CNC Machine Monitor",
-  "version": "1.1.0",
-  "documentation": "https://github.com/yourusername/HAAS-HomeAssistant",
-  "issue_tracker": "https://github.com/yourusername/HAAS-HomeAssistant/issues",
-  "requirements": [],
-  "dependencies": [
-    "mqtt"
-  ],
-  "codeowners": [],
-  "iot_class": "local_push",
+  "version": "2.0.0",
+  "documentation": "https://github.com/P3D-Creations/HAAS-HomeAssistant",
+  "issue_tracker": "https://github.com/P3D-Creations/HAAS-HomeAssistant/issues",
+  "requirements": ["aiohttp"],
+  "dependencies": [],
+  "codeowners": ["@P3D-Creations"],
+  "iot_class": "local_polling",
   "config_flow": true,
   "homeassistant": "2024.1.0"
 }
