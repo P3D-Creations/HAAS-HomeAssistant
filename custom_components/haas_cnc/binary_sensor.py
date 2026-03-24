@@ -19,7 +19,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     ATTR_DATA_SOURCE,
-    ATTR_LAST_UPDATE,
     AVAIL_AVAILABLE,
     CONF_HOST,
     CONF_MACHINE_NAME,
@@ -150,6 +149,4 @@ class HaasCncBinarySensor(CoordinatorEntity[HaasBaseCoordinator], BinarySensorEn
         attrs: dict[str, Any] = {}
         if self.coordinator.data:
             attrs[ATTR_DATA_SOURCE] = self.coordinator.data.get("_source", "unknown")
-        if self.coordinator.last_update_success_time:
-            attrs[ATTR_LAST_UPDATE] = self.coordinator.last_update_success_time.isoformat()
         return attrs

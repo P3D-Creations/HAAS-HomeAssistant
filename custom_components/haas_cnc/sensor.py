@@ -33,7 +33,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     ATTR_DATA_SOURCE,
-    ATTR_LAST_UPDATE,
     CONF_HOST,
     CONF_MACHINE_NAME,
     COORD_FAST,
@@ -420,8 +419,6 @@ class HaasCncSensor(CoordinatorEntity[HaasBaseCoordinator], SensorEntity):
         attrs: dict[str, Any] = {}
         if self.coordinator.data:
             attrs[ATTR_DATA_SOURCE] = self.coordinator.data.get("_source", "unknown")
-        if self.coordinator.last_update_success_time:
-            attrs[ATTR_LAST_UPDATE] = self.coordinator.last_update_success_time.isoformat()
         if self.entity_description.attributes_fn and self.coordinator.data:
             attrs.update(self.entity_description.attributes_fn(self.coordinator.data))
         return attrs
