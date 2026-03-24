@@ -1,5 +1,5 @@
 {
-  "name": "HAAS CNC Machine Monitor",
+  "name": "HAAS CNC",
   "render_readme": true,
   "homeassistant": "2024.1.0"
 }

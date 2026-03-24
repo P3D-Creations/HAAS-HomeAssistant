@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "HAAS CNC Machine Monitor",
+        "title": "HAAS CNC",
         "description": "Connect to your HAAS machine via MTConnect HTTP agent or MDC TCP interface.\n\nEnter the machine's IP address or hostname. The integration will try MTConnect first, then fall back to MDC (port 5051).",
         "data": {
           "host": "Host / IP Address",
@@ -51,6 +51,7 @@
       "z_act": { "name": "Z Position" },
       "a_act": { "name": "A Axis Position" },
       "b_act": { "name": "B Axis Position" },
+      "c_act": { "name": "C Axis Position" },
       "spindle_speed": { "name": "Spindle Speed" },
       "spindle_load": { "name": "Spindle Load" },
       "path_feedrate": { "name": "Path Feedrate" },

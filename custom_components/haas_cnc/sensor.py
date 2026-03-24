@@ -44,6 +44,7 @@ from .const import (
     KEY_ALARM,
     KEY_ALARM_CODE,
     KEY_B_ACT,
+    KEY_C_ACT,
     KEY_COOLANT_LEVEL,
     KEY_CYCLE_TIME,
     KEY_EXECUTION,
@@ -163,6 +164,16 @@ SENSOR_DESCRIPTIONS: tuple[HaasSensorEntityDescription, ...] = (
         suggested_display_precision=3,
         coordinator_key=COORD_FAST,
         value_fn=lambda d: _safe_get(d, KEY_B_ACT),
+    ),
+    HaasSensorEntityDescription(
+        key="c_act",
+        name="C Axis Position",
+        icon="mdi:rotate-3d-variant",
+        native_unit_of_measurement="°",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=3,
+        coordinator_key=COORD_FAST,
+        value_fn=lambda d: _safe_get(d, KEY_C_ACT),
     ),
     # Spindle
     HaasSensorEntityDescription(

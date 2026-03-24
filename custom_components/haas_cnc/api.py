@@ -28,6 +28,7 @@ from .const import (
     KEY_ALARM_CODE,
     KEY_AVAIL,
     KEY_B_ACT,
+    KEY_C_ACT,
     KEY_COOLANT_LEVEL,
     KEY_CYCLE_TIME,
     KEY_EXECUTION,
@@ -55,6 +56,7 @@ from .const import (
     KEY_Z_ACT,
     MACRO_A_WORK,
     MACRO_B_WORK,
+    MACRO_C_WORK,
     MACRO_COOLANT_LEVEL,
     MACRO_CYCLE_TIME,
     MACRO_FEEDRATE,
@@ -344,6 +346,7 @@ class MTConnectClient:
         data[KEY_Z_ACT] = _safe_float(items.get("Zabs") or items.get("Zact") or items.get("z"))
         data[KEY_A_ACT] = _safe_float(items.get("Aabs") or items.get("Aact") or items.get("a"))
         data[KEY_B_ACT] = _safe_float(items.get("Babs") or items.get("Bact") or items.get("b"))
+        data[KEY_C_ACT] = _safe_float(items.get("Cabs") or items.get("Cact") or items.get("c"))
 
         # Spindle
         data[KEY_SPINDLE_SPEED] = _safe_float(items.get("Srpm") or items.get("speed"))
@@ -593,8 +596,7 @@ class MDCClient:
                 (("Y", "Y MACHINE", "Y WORK"), KEY_Y_ACT),
                 (("Z", "Z MACHINE", "Z WORK"), KEY_Z_ACT),
                 (("A", "A MACHINE", "A WORK"), KEY_A_ACT),
-                (("B", "B MACHINE", "B WORK"), KEY_B_ACT),
-            ):
+                (("B", "B MACHINE", "B WORK"), KEY_B_ACT),                (("C", "C MACHINE", "C WORK"), KEY_C_ACT),            ):
                 for lbl in lbls:
                     if lbl in labeled and key not in data:
                         data[key] = _safe_float(labeled[lbl])
@@ -618,7 +620,7 @@ class MDCClient:
             )
         else:
             # Classic positional: "X+nnn.nnnn, Y+nnn.nnnn, ..."
-            axis_keys = [KEY_X_ACT, KEY_Y_ACT, KEY_Z_ACT, KEY_A_ACT, KEY_B_ACT]
+            axis_keys = [KEY_X_ACT, KEY_Y_ACT, KEY_Z_ACT, KEY_A_ACT, KEY_B_ACT, KEY_C_ACT]
             for i, key in enumerate(axis_keys):
                 if i < len(parts):
                     # Strip axis letter prefix like "X+123.456"
@@ -626,7 +628,7 @@ class MDCClient:
                     data[key] = _safe_float(val)
 
             # Spindle speed and load follow the axes
-            axis_count = min(5, len(parts))
+            axis_count = min(6, len(parts))
             remaining = parts[axis_count:]
             if remaining:
                 data[KEY_SPINDLE_SPEED] = _safe_float(remaining[0])
@@ -759,6 +761,8 @@ class MDCClient:
             fast_macros[KEY_A_ACT] = MACRO_A_WORK
         if results.get(KEY_B_ACT) is None:
             fast_macros[KEY_B_ACT] = MACRO_B_WORK
+        if results.get(KEY_C_ACT) is None:
+            fast_macros[KEY_C_ACT] = MACRO_C_WORK
         if results.get(KEY_SPINDLE_SPEED) is None:
             fast_macros[KEY_SPINDLE_SPEED] = MACRO_SPINDLE_SPEED
         if results.get(KEY_SPINDLE_LOAD) is None:
