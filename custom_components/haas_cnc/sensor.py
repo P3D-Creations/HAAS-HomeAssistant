@@ -103,7 +103,7 @@ SENSOR_DESCRIPTIONS: tuple[HaasSensorEntityDescription, ...] = (
         key="mode",
         name="Operating Mode",
         icon="mdi:cog-outline",
-        coordinator_key=COORD_FAST,
+        coordinator_key=COORD_MEDIUM,
         value_fn=lambda d: _safe_get(d, KEY_MODE),
     ),
     HaasSensorEntityDescription(
@@ -261,7 +261,7 @@ SENSOR_DESCRIPTIONS: tuple[HaasSensorEntityDescription, ...] = (
         icon="mdi:water-percent",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=1,
-        coordinator_key=COORD_MEDIUM,
+        coordinator_key=COORD_FAST,
         value_fn=lambda d: _safe_get(d, KEY_COOLANT_LEVEL),
     ),
     HaasSensorEntityDescription(

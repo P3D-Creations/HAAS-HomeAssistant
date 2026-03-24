@@ -96,6 +96,77 @@ def _safe_int(value: str | None) -> int | None:
 
 
 # ======================================================================
+# MDC response parsing helpers  (NGC returns labeled fields)
+# ======================================================================
+
+# Known labels in HAAS NGC MDC responses, grouped by Q-code.
+# NGC format: ">LABEL, VALUE, LABEL, VALUE, ..."
+_Q100_LABELS = frozenset({
+    "SERIAL NUMBER", "SERIAL", "S/N",
+    "SOFTWARE VERSION", "SOFTWARE", "VERSION",
+    "MODEL", "MODEL NUMBER",
+})
+_Q104_LABELS = frozenset({
+    "MODE", "PROGRAM", "STATUS",
+})
+_Q200_LABELS = frozenset({
+    "TOOL IN SPINDLE", "TOOL NUMBER", "TOOL",
+    "NEXT TOOL", "PREVIOUS TOOL",
+    "TOOL CHANGES", "T CHANGES",
+})
+_Q300_AXIS_LABELS = frozenset({
+    "X", "Y", "Z", "A", "B", "C",
+    "X MACHINE", "Y MACHINE", "Z MACHINE",
+    "A MACHINE", "B MACHINE", "C MACHINE",
+    "X WORK", "Y WORK", "Z WORK",
+    "A WORK", "B WORK", "C WORK",
+})
+_Q300_OTHER_LABELS = frozenset({
+    "RPM", "SPINDLE SPEED", "SPINDLE RPM",
+    "TORQUE", "LOAD", "SPINDLE LOAD",
+    "COOLANT LEVEL", "COOLANT",
+    "FEEDRATE", "FEED",
+})
+_Q500_LABELS = frozenset({
+    "PROGRAM", "STATUS", "PARTS", "PART COUNT",
+    "TOOL", "TOOL NUMBER",
+})
+
+
+def _get_mdc_parts(raw: str) -> list[str]:
+    """Clean and split an MDC response into comma-separated parts.
+
+    Handles multi-line responses by joining all lines.
+    """
+    combined = ""
+    for line in raw.split("\n"):
+        clean = line.lstrip(">").strip()
+        if clean:
+            if combined:
+                combined += ", "
+            combined += clean
+    return [p.strip() for p in combined.split(",") if p.strip()]
+
+
+def _find_labeled(parts: list[str], labels: frozenset[str]) -> dict[str, str]:
+    """Walk comma-separated *parts* and extract label→value pairs.
+
+    A "label" is a part whose upper-case text is in *labels*; the next
+    part is treated as its value.
+    """
+    found: dict[str, str] = {}
+    i = 0
+    while i < len(parts):
+        upper = parts[i].upper()
+        if upper in labels and i + 1 < len(parts):
+            found[upper] = parts[i + 1]
+            i += 2
+        else:
+            i += 1
+    return found
+
+
+# ======================================================================
 # MTConnect HTTP Client
 # ======================================================================
 
@@ -336,7 +407,7 @@ class MDCClient:
         self._lock = asyncio.Lock()
 
     async def _send_command(self, command: str) -> str | None:
-        """Open a TCP connection, send *command*, read response, close."""
+        """Open a TCP connection, send *command*, read all response lines, close."""
         async with self._lock:
             try:
                 reader, writer = await asyncio.wait_for(
@@ -346,12 +417,28 @@ class MDCClient:
                 writer.write(f"{command}\r\n".encode("ascii"))
                 await writer.drain()
 
-                response = await asyncio.wait_for(
-                    reader.readline(), timeout=_MDC_TIMEOUT
-                )
+                # Read all available lines (NGC may return multi-line)
+                lines: list[str] = []
+                while True:
+                    try:
+                        line = await asyncio.wait_for(
+                            reader.readline(),
+                            timeout=(0.5 if lines else _MDC_TIMEOUT),
+                        )
+                        if not line:
+                            break
+                        text = line.decode("ascii", errors="replace").strip()
+                        if text:
+                            lines.append(text)
+                    except asyncio.TimeoutError:
+                        break
+
                 writer.close()
                 await writer.wait_closed()
-                return response.decode("ascii", errors="replace").strip()
+
+                raw = "\n".join(lines)
+                _LOGGER.debug("MDC %s → %r", command, raw)
+                return raw if raw else None
             except (OSError, asyncio.TimeoutError) as err:
                 _LOGGER.debug("MDC command %r failed: %s", command, err)
                 return None
@@ -361,59 +448,159 @@ class MDCClient:
     # ------------------------------------------------------------------
 
     async def async_q100(self) -> dict[str, Any]:
-        """?Q100 → serial number, software version, model."""
+        """?Q100 → serial number, software version, model.
+
+        NGC format:  ``>SERIAL NUMBER, 1182001, SOFTWARE VERSION, 100.21, ...``
+        Classic:     ``>MODEL, SERIAL, SOFTWARE``
+        """
         data: dict[str, Any] = {}
         raw = await self._send_command(MDC_Q100)
-        if raw:
-            # Typical: "SERIAL NUMBER, SOFTWARE VERSION, MODEL"
-            # Or:      ">SERIAL, VER, MODEL"
-            clean = raw.lstrip(">").strip()
-            parts = [p.strip() for p in clean.split(",")]
+        if not raw:
+            return data
+
+        parts = _get_mdc_parts(raw)
+
+        # Try NGC labeled format first
+        labeled = _find_labeled(parts, _Q100_LABELS)
+        if labeled:
+            data[KEY_SERIAL] = (
+                labeled.get("SERIAL NUMBER")
+                or labeled.get("SERIAL")
+                or labeled.get("S/N")
+            )
+            data[KEY_SOFTWARE_VERSION] = (
+                labeled.get("SOFTWARE VERSION")
+                or labeled.get("SOFTWARE")
+                or labeled.get("VERSION")
+            )
+            data[KEY_MODEL] = (
+                labeled.get("MODEL NUMBER") or labeled.get("MODEL")
+            )
+        else:
+            # Positional fallback: MODEL, SERIAL, SOFTWARE_VERSION
             if len(parts) >= 3:
-                data[KEY_SERIAL] = parts[0]
-                data[KEY_SOFTWARE_VERSION] = parts[1]
-                data[KEY_MODEL] = parts[2]
+                data[KEY_MODEL] = parts[0]
+                data[KEY_SERIAL] = parts[1]
+                data[KEY_SOFTWARE_VERSION] = parts[2]
             elif len(parts) == 2:
                 data[KEY_SERIAL] = parts[0]
                 data[KEY_SOFTWARE_VERSION] = parts[1]
             elif len(parts) == 1:
                 data[KEY_SERIAL] = parts[0]
-        return data
+
+        return {k: v for k, v in data.items() if v is not None}
 
     async def async_q104(self) -> dict[str, Any]:
-        """?Q104 → operating mode."""
+        """?Q104 → operating mode.
+
+        NGC format:  ``>MODE, (MDI), PROGRAM, O00001, STATUS, IDLE``
+        Classic:     ``>LIST MDI, O02020, IDLE``
+        """
         data: dict[str, Any] = {}
         raw = await self._send_command(MDC_Q104)
-        if raw:
-            clean = raw.lstrip(">").strip()
-            parts = [p.strip() for p in clean.split(",")]
+        if not raw:
+            return data
+
+        parts = _get_mdc_parts(raw)
+
+        # Try NGC labeled format
+        labeled = _find_labeled(parts, _Q104_LABELS)
+        if labeled:
+            if "MODE" in labeled:
+                data[KEY_MODE] = labeled["MODE"]
+            if "PROGRAM" in labeled:
+                data[KEY_PROGRAM] = labeled["PROGRAM"]
+        else:
+            # Positional fallback: mode is typically the first or last field
             if parts:
-                data[KEY_MODE] = parts[-1]  # mode is typically last field
+                data[KEY_MODE] = parts[0]
+
         return data
 
     async def async_q200(self) -> dict[str, Any]:
-        """?Q200 → tool change info (previous, current, next tool)."""
+        """?Q200 → tool change info (previous, current, next tool).
+
+        NGC format:  ``>TOOL IN SPINDLE, 5, NEXT TOOL, 0, TOOL CHANGES, 71484``
+        Classic:     ``>PREV_TOOL, CURRENT_TOOL, NEXT_TOOL``
+        """
         data: dict[str, Any] = {}
         raw = await self._send_command(MDC_Q200)
-        if raw:
-            clean = raw.lstrip(">").strip()
-            parts = [p.strip() for p in clean.split(",")]
-            if parts:
-                # Typical: "PREV_TOOL, CURRENT_TOOL, NEXT_TOOL"
-                data[KEY_TOOL_NUMBER] = parts[1] if len(parts) >= 2 else parts[0]
+        if not raw:
+            return data
+
+        parts = _get_mdc_parts(raw)
+
+        # Try NGC labeled format
+        labeled = _find_labeled(parts, _Q200_LABELS)
+        tool = (
+            labeled.get("TOOL IN SPINDLE")
+            or labeled.get("TOOL NUMBER")
+            or labeled.get("TOOL")
+        )
+        if tool is not None:
+            data[KEY_TOOL_NUMBER] = tool
+        elif parts:
+            # Positional fallback – pick the first part that's a
+            # reasonable tool number (0-999)
+            for p in parts:
+                val = _safe_int(p)
+                if val is not None and 0 <= val <= 999:
+                    data[KEY_TOOL_NUMBER] = str(val)
+                    break
+
         return data
 
     async def async_q300(self) -> dict[str, Any]:
         """?Q300 → axis positions + spindle RPM + load.
 
-        Typical response: "> X+000.0000, Y+000.0000, Z+000.0000,
-                             A+000.0000, B+000.0000, RPM, LOAD%"
+        NGC labeled:
+            ``>X, +0.0000, Y, +0.0000, Z, +0.0000, A, +0.0000,
+              B, +0.0000, COOLANT LEVEL, 0, RPM, 0, TORQUE, 0``
+        Classic positional:
+            ``>X+000.0000, Y+000.0000, Z+000.0000,
+              A+000.0000, B+000.0000, RPM, LOAD%``
         """
         data: dict[str, Any] = {}
         raw = await self._send_command(MDC_Q300)
-        if raw:
-            clean = raw.lstrip(">").strip()
-            parts = [p.strip() for p in clean.split(",")]
+        if not raw:
+            return data
+
+        parts = _get_mdc_parts(raw)
+        all_labels = _Q300_AXIS_LABELS | _Q300_OTHER_LABELS
+        labeled = _find_labeled(parts, all_labels)
+
+        if labeled:
+            # NGC labeled format
+            for lbls, key in (
+                (("X", "X MACHINE", "X WORK"), KEY_X_ACT),
+                (("Y", "Y MACHINE", "Y WORK"), KEY_Y_ACT),
+                (("Z", "Z MACHINE", "Z WORK"), KEY_Z_ACT),
+                (("A", "A MACHINE", "A WORK"), KEY_A_ACT),
+                (("B", "B MACHINE", "B WORK"), KEY_B_ACT),
+            ):
+                for lbl in lbls:
+                    if lbl in labeled and key not in data:
+                        data[key] = _safe_float(labeled[lbl])
+                        break
+
+            data[KEY_SPINDLE_SPEED] = _safe_float(
+                labeled.get("RPM")
+                or labeled.get("SPINDLE SPEED")
+                or labeled.get("SPINDLE RPM")
+            )
+            data[KEY_SPINDLE_LOAD] = _safe_float(
+                labeled.get("TORQUE")
+                or labeled.get("LOAD")
+                or labeled.get("SPINDLE LOAD")
+            )
+            data[KEY_PATH_FEEDRATE] = _safe_float(
+                labeled.get("FEEDRATE") or labeled.get("FEED")
+            )
+            data[KEY_COOLANT_LEVEL] = _safe_float(
+                labeled.get("COOLANT LEVEL") or labeled.get("COOLANT")
+            )
+        else:
+            # Classic positional: "X+nnn.nnnn, Y+nnn.nnnn, ..."
             axis_keys = [KEY_X_ACT, KEY_Y_ACT, KEY_Z_ACT, KEY_A_ACT, KEY_B_ACT]
             for i, key in enumerate(axis_keys):
                 if i < len(parts):
@@ -428,29 +615,54 @@ class MDCClient:
                 data[KEY_SPINDLE_SPEED] = _safe_float(remaining[0])
             if len(remaining) >= 2:
                 data[KEY_SPINDLE_LOAD] = _safe_float(remaining[1])
+
         return data
 
     async def async_q500(self) -> dict[str, Any]:
-        """?Q500 → machine status: IDLE, BUSY(program), or ALARM."""
+        """?Q500 → machine status: IDLE, BUSY(program), or ALARM.
+
+        NGC labeled:
+            ``>PROGRAM, O00001, STATUS, BUSY, PARTS, 123``
+        Classic:
+            ``>IDLE``  /  ``>BUSY``  /  ``>ALARM``
+        """
         data: dict[str, Any] = {}
         raw = await self._send_command(MDC_Q500)
-        if raw:
-            clean = raw.lstrip(">").strip()
-            data[KEY_MDC_STATUS] = clean
+        if not raw:
+            return data
 
-            # Map to standard execution states
-            upper = clean.upper()
-            if "ALARM" in upper:
-                data[KEY_EXECUTION] = "STOPPED"
-                data[KEY_ALARM] = clean
-            elif "BUSY" in upper or "RUN" in upper:
-                data[KEY_EXECUTION] = AVAIL_AVAILABLE  # use ACTIVE
-                data[KEY_EXECUTION] = "ACTIVE"
-            else:
-                data[KEY_EXECUTION] = "IDLE"
-                data[KEY_ALARM] = None
+        parts = _get_mdc_parts(raw)
+        data[KEY_MDC_STATUS] = raw.lstrip(">").strip()
 
-            data[KEY_AVAIL] = AVAIL_AVAILABLE
+        # Try NGC labeled format
+        labeled = _find_labeled(parts, _Q500_LABELS)
+        status_str = labeled.get("STATUS", "")
+
+        if labeled:
+            if labeled.get("PROGRAM"):
+                data[KEY_PROGRAM] = labeled["PROGRAM"]
+            if labeled.get("PARTS") or labeled.get("PART COUNT"):
+                data[KEY_PART_COUNT] = _safe_int(
+                    labeled.get("PARTS") or labeled.get("PART COUNT")
+                )
+        if not status_str and parts:
+            # Positional: single word like "IDLE" / "BUSY" / "ALARM"
+            status_str = parts[0]
+
+        # Map status to execution state
+        upper = status_str.upper()
+        if "ALARM" in upper:
+            data[KEY_EXECUTION] = "STOPPED"
+            data[KEY_ALARM] = status_str
+            data[KEY_ALARM_CODE] = status_str
+        elif "BUSY" in upper or "RUN" in upper or "ACTIVE" in upper:
+            data[KEY_EXECUTION] = "ACTIVE"
+        else:
+            data[KEY_EXECUTION] = "IDLE"
+            data[KEY_ALARM] = None
+            data[KEY_ALARM_CODE] = None
+
+        data[KEY_AVAIL] = AVAIL_AVAILABLE
         return data
 
     async def async_read_macro(self, variable: int) -> float | None:
@@ -488,15 +700,24 @@ class MDCClient:
         return results
 
     async def async_get_medium_data(self) -> dict[str, Any]:
-        """Query medium-rate data via MDC (tool info, mode)."""
+        """Query medium-rate data via MDC (tool info, mode, alarm)."""
         results: dict[str, Any] = {}
-        q200, q104 = await asyncio.gather(
-            self.async_q200(), self.async_q104(), return_exceptions=True
+        q200, q104, q500 = await asyncio.gather(
+            self.async_q200(),
+            self.async_q104(),
+            self.async_q500(),
+            return_exceptions=True,
         )
         if isinstance(q200, dict):
             results.update(q200)
         if isinstance(q104, dict):
             results.update(q104)
+        if isinstance(q500, dict):
+            # Merge alarm/program/part_count from Q500 into medium tier
+            for k in (KEY_ALARM, KEY_ALARM_CODE, KEY_PROGRAM, KEY_PART_COUNT,
+                       KEY_EXECUTION, KEY_AVAIL, KEY_MDC_STATUS):
+                if q500.get(k) is not None:
+                    results.setdefault(k, q500[k])
 
         # Read active tool offsets if tool number known
         tool_num = results.get(KEY_TOOL_NUMBER)
