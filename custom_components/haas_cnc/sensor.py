@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.sensor import (
+    SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
@@ -22,6 +23,7 @@ from homeassistant.const import (
     PERCENTAGE,
     REVOLUTIONS_PER_MINUTE,
     UnitOfLength,
+    UnitOfTime,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -71,20 +73,16 @@ from .coordinator import HaasBaseCoordinator, _safe_get
 _LOGGER = logging.getLogger(__name__)
 
 
-def _seconds_to_hhmmss(seconds: float | int | None) -> str | None:
-    """Convert a numeric seconds value to HH:MM:SS string."""
-    if seconds is None:
+def _remaining_seconds(data: dict[str, Any]) -> float | None:
+    """Compute remaining part time in seconds (last - present, min 0)."""
+    last = _safe_get(data, KEY_LAST_PART_TIME)
+    present = _safe_get(data, KEY_PRESENT_PART_TIME)
+    if last is None or present is None:
         return None
     try:
-        total = int(float(seconds))
+        return max(0.0, float(last) - float(present))
     except (ValueError, TypeError):
         return None
-    if total < 0:
-        return "00:00:00"
-    h = total // 3600
-    m = (total % 3600) // 60
-    s = total % 60
-    return f"{h:02d}:{m:02d}:{s:02d}"
 
 
 # ======================================================================
@@ -219,40 +217,50 @@ SENSOR_DESCRIPTIONS: tuple[HaasSensorEntityDescription, ...] = (
         coordinator_key=COORD_FAST,
         value_fn=lambda d: _safe_get(d, KEY_PATH_FEEDRATE),
     ),
-    # Part timers (macro reads) — displayed as HH:MM:SS
+    # Part timers (macro reads) — numeric seconds, HA formats as duration
     HaasSensorEntityDescription(
         key="present_part_time",
         name="Present Part Timer",
         icon="mdi:timer-sand",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
         coordinator_key=COORD_FAST,
-        value_fn=lambda d: _seconds_to_hhmmss(_safe_get(d, KEY_PRESENT_PART_TIME)),
+        value_fn=lambda d: _safe_get(d, KEY_PRESENT_PART_TIME),
     ),
     HaasSensorEntityDescription(
         key="last_part_time",
         name="Last Part Timer",
         icon="mdi:timer-check-outline",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
         coordinator_key=COORD_FAST,
-        value_fn=lambda d: _seconds_to_hhmmss(_safe_get(d, KEY_LAST_PART_TIME)),
+        value_fn=lambda d: _safe_get(d, KEY_LAST_PART_TIME),
     ),
     HaasSensorEntityDescription(
         key="prev_part_time",
         name="Previous Part Timer",
         icon="mdi:timer-outline",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
         coordinator_key=COORD_FAST,
-        value_fn=lambda d: _seconds_to_hhmmss(_safe_get(d, KEY_PREV_PART_TIME)),
+        value_fn=lambda d: _safe_get(d, KEY_PREV_PART_TIME),
     ),
     HaasSensorEntityDescription(
         key="remaining_part_time",
         name="Remaining Part Time",
         icon="mdi:timer-sand-complete",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
         coordinator_key=COORD_FAST,
-        value_fn=lambda d: _seconds_to_hhmmss(
-            max(0, float(_safe_get(d, KEY_LAST_PART_TIME) or 0)
-                - float(_safe_get(d, KEY_PRESENT_PART_TIME) or 0))
-            if _safe_get(d, KEY_LAST_PART_TIME) is not None
-            and _safe_get(d, KEY_PRESENT_PART_TIME) is not None
-            else None
-        ),
+        value_fn=lambda d: _remaining_seconds(d),
     ),
 
     # ---- Medium tier: tool / offsets / part count / alarms ----
@@ -351,17 +359,23 @@ SENSOR_DESCRIPTIONS: tuple[HaasSensorEntityDescription, ...] = (
         key="power_on_time",
         name="Power-On Time",
         icon="mdi:clock-start",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         coordinator_key=COORD_SLOW,
         entity_registry_enabled_default=False,
-        value_fn=lambda d: _seconds_to_hhmmss(_safe_get(d, KEY_POWER_ON_TIME)),
+        value_fn=lambda d: _safe_get(d, KEY_POWER_ON_TIME),
     ),
     HaasSensorEntityDescription(
         key="cycle_time",
         name="Cycle Time",
         icon="mdi:timer-outline",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         coordinator_key=COORD_SLOW,
         entity_registry_enabled_default=False,
-        value_fn=lambda d: _seconds_to_hhmmss(_safe_get(d, KEY_CYCLE_TIME)),
+        value_fn=lambda d: _safe_get(d, KEY_CYCLE_TIME),
     ),
 )
 
