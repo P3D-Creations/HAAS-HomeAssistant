@@ -43,3 +43,8 @@ secrets.yaml
 
 # Large source assets (resized copies are committed)
 Haas-Logo-Single-01-1136046903.png
+
+# Local development files
+project_notes.md
+chat_log.md
+generate_icons.py
