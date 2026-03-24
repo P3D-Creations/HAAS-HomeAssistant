@@ -75,8 +75,68 @@ Initial repository creation and integration framework scaffold.
 ### Next Steps
 
 - [ ] Expand the MQTT adapter with extended macro variables (A/B axes, alarm code, tool offsets, cycle time)
-- [ ] Test the integration in a Home Assistant development environment
+- [x] Test the integration in a Home Assistant development environment
 - [ ] Create Lovelace dashboard UI (cards and views)
 - [ ] Implement estimated remaining time logic as a HA template sensor
 - [ ] Add maintenance alert monitoring via machine parameter polling
-- [ ] Set up GitHub repository remote and CI (GitHub Actions validation)
+- [x] Set up GitHub repository remote and CI (GitHub Actions validation)
+
+---
+
+## Session 2 – 2026-03-24
+
+### Summary
+
+HACS configuration, automated release pipeline, integration icons, and log review.
+
+### Request
+
+> 1. Automate the release process so pushing commits auto-increments version and creates a release
+> 2. Fix integration icon/thumbnail
+> 3. Review attached HA logs – axis positions timing out
+> 4. Disable cartridge information since machine is not dispensing version
+
+### Actions Taken
+
+1. **Auto-release workflow** – Replaced the tag-triggered `release.yml` with a full auto-versioning pipeline:
+   - Triggers on every push to `main`/`master`
+   - Reads current version from `manifest.json`
+   - Determines bump type from commit messages (conventional commits):
+     - `BREAKING` or `!:` → **major** bump
+     - `feat:` → **minor** bump
+     - Everything else → **patch** bump
+   - Updates `manifest.json`, commits with `[skip ci]` (prevents infinite loop)
+   - Tags and pushes the new version
+   - Creates a GitHub Release with the zipped component
+   - HACS picks up the release automatically
+
+2. **Integration icons** – Generated PNG brand images for the integration:
+   - Created `generate_icons.py` script (Pillow-based, draws a CNC machine icon)
+   - Generated 256px and 512px variants of `icon.png` and `logo.png`
+   - Placed in both `custom_components/haas_cnc/` and repo root (HACS checks both locations)
+   - Note: For the icon to appear in HA's Settings > Integrations page (not just HACS), a submission to the `home-assistant/brands` repository would be required.
+
+3. **Log analysis** – Reviewed the attached HA log:
+   - **No `haas_cnc` errors found** – the integration is either not installed yet or loaded cleanly
+   - The axis position timeouts (`Timeout after 15.xxx s for GET .../AxisPositions`) are from `custom_components.datron_next`, a **separate** integration for a Datron CNC machine at 192.168.2.19
+   - The cartridge errors (`API error 400 for /Cartridge/CurrentLevel: The value is only available in the Dispensing Edition`) are also from `datron_next`
+   - These issues are in the **datron_next** integration, not haas_cnc – they would need to be addressed in that project's workspace
+
+### Decisions & Rationale
+
+| Decision | Rationale |
+|---|---|
+| Conventional-commits-based version bumping | Gives control over major/minor/patch via commit message prefixes; no extra config files needed |
+| `[skip ci]` on version-bump commits | Prevents infinite loop (workflow push triggering itself) |
+| PNG icons via Pillow script | Can regenerate easily; text-based SVG not fully supported by HA brands system |
+| Icons in both repo root and component dir | HACS checks repo root; future HA brands support may check component dir |
+
+### Next Steps
+
+- [ ] Expand the MQTT adapter with extended macro variables (A/B axes, alarm code, tool offsets, cycle time)
+- [ ] Create Lovelace dashboard UI (cards and views)
+- [ ] Implement estimated remaining time logic as a HA template sensor
+- [ ] Add maintenance alert monitoring via machine parameter polling
+- [ ] Submit brand images to `home-assistant/brands` repository for official HA UI icon support
+- [ ] Address datron_next axis timeout and cartridge issues (separate workspace/project)
+- [ ] Install haas_cnc on HA instance and verify MQTT connectivity

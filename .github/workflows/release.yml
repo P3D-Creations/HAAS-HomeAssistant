@@ -1,29 +1,123 @@
 ---
-name: Release
+name: Auto Release
 
+# Triggers on every push to main/master (except version-bump commits)
 on:
   push:
-    tags:
-      - "v*"
+    branches: ["main", "master"]
+
+permissions:
+  contents: write
 
 jobs:
   release:
-    name: Create GitHub Release
+    name: Bump Version & Release
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+
+    # Skip the version-bump commits created by this workflow
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+
     steps:
+      # ----------------------------------------------------------
+      # 1. Checkout with full history (needed for release notes)
+      # ----------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Create zip archive
+      # ----------------------------------------------------------
+      # 2. Read current version from manifest.json
+      # ----------------------------------------------------------
+      - name: Get current version
+        id: current
         run: |
-          zip -r haas_cnc.zip custom_components/haas_cnc/
+          version=$(jq -r '.version' custom_components/haas_cnc/manifest.json)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # ----------------------------------------------------------
+      # 3. Determine version bump type from commit messages
+      #    - "BREAKING" or "!" in subject → major
+      #    - "feat" prefix                → minor
+      #    - everything else              → patch
+      # ----------------------------------------------------------
+      - name: Determine bump type
+        id: bump_type
+        run: |
+          # Get all commits since last tag (or all commits if no tag)
+          last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$last_tag" ]; then
+            commits=$(git log --pretty=format:"%s" )
+          else
+            commits=$(git log "$last_tag"..HEAD --pretty=format:"%s")
+          fi
+
+          if echo "$commits" | grep -qiE "BREAKING|^[a-z]+(\(.+\))?!:"; then
+            echo "type=major" >> "$GITHUB_OUTPUT"
+          elif echo "$commits" | grep -qiE "^feat(\(.+\))?:"; then
+            echo "type=minor" >> "$GITHUB_OUTPUT"
+          else
+            echo "type=patch" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ----------------------------------------------------------
+      # 4. Compute the next version
+      # ----------------------------------------------------------
+      - name: Bump version
+        id: bump
+        run: |
+          current="${{ steps.current.outputs.version }}"
+          IFS='.' read -r major minor patch <<< "$current"
+          case "${{ steps.bump_type.outputs.type }}" in
+            major)
+              major=$((major + 1)); minor=0; patch=0 ;;
+            minor)
+              minor=$((minor + 1)); patch=0 ;;
+            *)
+              patch=$((patch + 1)) ;;
+          esac
+          new_version="$major.$minor.$patch"
+          echo "version=$new_version" >> "$GITHUB_OUTPUT"
+          echo "### Version bump: $current → $new_version (${{ steps.bump_type.outputs.type }})" >> "$GITHUB_STEP_SUMMARY"
+
+      # ----------------------------------------------------------
+      # 5. Update manifest.json with the new version
+      # ----------------------------------------------------------
+      - name: Update manifest.json
+        run: |
+          jq --arg v "${{ steps.bump.outputs.version }}" \
+            '.version = $v' custom_components/haas_cnc/manifest.json > tmp.json
+          mv tmp.json custom_components/haas_cnc/manifest.json
+
+      # ----------------------------------------------------------
+      # 6. Commit the version bump (with [skip ci] to avoid loop)
+      # ----------------------------------------------------------
+      - name: Commit version bump
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add custom_components/haas_cnc/manifest.json
+          git commit -m "chore: bump version to ${{ steps.bump.outputs.version }} [skip ci]"
+          git push
+
+      # ----------------------------------------------------------
+      # 7. Create & push git tag
+      # ----------------------------------------------------------
+      - name: Create tag
+        run: |
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin "v${{ steps.bump.outputs.version }}"
+
+      # ----------------------------------------------------------
+      # 8. Package and create the GitHub Release
+      # ----------------------------------------------------------
+      - name: Create zip archive
+        run: zip -r haas_cnc.zip custom_components/haas_cnc/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: "v${{ steps.bump.outputs.version }}"
+          name: "v${{ steps.bump.outputs.version }}"
           files: haas_cnc.zip
           generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
