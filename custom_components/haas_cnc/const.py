@@ -53,8 +53,6 @@ KEY_B_ACT = "b_act"
 KEY_SPINDLE_SPEED = "spindle_speed"
 KEY_SPINDLE_LOAD = "spindle_load"
 KEY_PATH_FEEDRATE = "path_feedrate"
-KEY_BLOCK = "block"                    # current G-code block
-KEY_LINE = "line"                      # current line number
 
 # Medium tier
 KEY_TOOL_NUMBER = "tool_number"
@@ -70,13 +68,17 @@ KEY_ALARM_CODE = "alarm_code"
 KEY_SERIAL = "serial_number"
 KEY_MODEL = "model"
 KEY_SOFTWARE_VERSION = "software_version"
-KEY_POWER_ON_TIME = "power_on_time"     # accumulated hours
-KEY_MOTION_TIME = "motion_time"         # accumulated hours
-KEY_CYCLE_TIME = "cycle_time"
+KEY_POWER_ON_TIME = "power_on_time"     # accumulated seconds
+KEY_CYCLE_TIME = "cycle_time"           # accumulated seconds
+
+# Part timers (fast tier, macro-read)
+KEY_PRESENT_PART_TIME = "present_part_time"   # current part timer
+KEY_LAST_PART_TIME = "last_part_time"         # last completed part timer
+KEY_PREV_PART_TIME = "prev_part_time"         # previous part timer
 
 # Derived / MDC-only keys
 KEY_MDC_STATUS = "mdc_status"          # IDLE / BUSY / ALARM from ?Q500
-KEY_CYCLE_COUNT = "cycle_count"
+KEY_OPT_STOP = "opt_stop"              # Optional stop status (0/1)
 
 # ---------------------------------------------------------------------------
 # MTConnect execution & availability states
@@ -142,27 +144,31 @@ MACRO_POSITION_START = 5021              # Current position #5021-#5026
 # ---------------------------------------------------------------------------
 
 # -- Fast tier macros (read every ~2 s) --
-MACRO_X_WORK = 5021               # Current X position (work coordinates)
-MACRO_Y_WORK = 5022               # Current Y position
-MACRO_Z_WORK = 5023               # Current Z position
-MACRO_A_WORK = 5024               # Current A position
-MACRO_B_WORK = 5025               # Current B position
+MACRO_X_WORK = 5041               # Current X position (work coordinates)
+MACRO_Y_WORK = 5042               # Current Y position
+MACRO_Z_WORK = 5043               # Current Z position
+MACRO_A_WORK = 5044               # Current A position
+MACRO_B_WORK = 5045               # Current B position
+MACRO_C_WORK = 5046               # Current C position
 MACRO_SPINDLE_SPEED = 3027        # Actual spindle RPM
 MACRO_SPINDLE_LOAD = 1098         # Spindle load %
 MACRO_FEEDRATE = 4119             # Programmed feedrate (mm/min or in/min)
-MACRO_COOLANT_LEVEL = 1094        # Coolant level %
+MACRO_COOLANT_LEVEL = 13013        # Coolant level %
+MACRO_PRESENT_PART_TIME = 3023    # Present part timer (seconds, read only)
+MACRO_LAST_PART_TIME = 3024       # Last complete part timer (seconds, read only)
+MACRO_PREV_PART_TIME = 3025       # Previous part timer (seconds, read only)
+MACRO_OPT_STOP = 3033             # Optional stop status (0 = off, 1 = on)
 
 # -- Medium tier macros (read every ~10 s) --
-MACRO_TOOL_IN_SPINDLE = 8550      # Current tool number (T)
-MACRO_PART_COUNT = 3026           # M30 count (parts)
+MACRO_TOOL_IN_SPINDLE = 3026      # Current tool number (T)
+MACRO_PART_COUNT = 3901           # M30 count (parts)
 MACRO_WORK_OFFSET_GROUP = 4014    # Active work offset group (54=G54, etc.)
-MACRO_LAST_ALARM = 3012           # Last alarm number
+MACRO_LAST_ALARM = None           # Last alarm number
 
 # -- Slow tier macros (read every ~600 s) --
-MACRO_POWER_ON_TIME = 3001        # Power-on timer (milliseconds)
-MACRO_CYCLE_TIME = 3002           # Cycle-start timer (milliseconds)
-MACRO_MOTION_TIME = None          # Not available via standard macro; set to
-                                  # a variable number if your machine has one
+MACRO_POWER_ON_TIME = 3020        # Power-on timer (milliseconds)
+MACRO_CYCLE_TIME = 3021           # Cycle-start timer (milliseconds)
+
 
 # ---------------------------------------------------------------------------
 # Extra entity attributes

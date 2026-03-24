@@ -28,18 +28,19 @@ from .const import (
     KEY_ALARM_CODE,
     KEY_AVAIL,
     KEY_B_ACT,
-    KEY_BLOCK,
     KEY_COOLANT_LEVEL,
     KEY_CYCLE_TIME,
     KEY_EXECUTION,
-    KEY_LINE,
+    KEY_LAST_PART_TIME,
     KEY_MDC_STATUS,
     KEY_MODE,
     KEY_MODEL,
-    KEY_MOTION_TIME,
+    KEY_OPT_STOP,
     KEY_PART_COUNT,
     KEY_PATH_FEEDRATE,
     KEY_POWER_ON_TIME,
+    KEY_PRESENT_PART_TIME,
+    KEY_PREV_PART_TIME,
     KEY_PROGRAM,
     KEY_SERIAL,
     KEY_SOFTWARE_VERSION,
@@ -58,9 +59,12 @@ from .const import (
     MACRO_CYCLE_TIME,
     MACRO_FEEDRATE,
     MACRO_LAST_ALARM,
-    MACRO_MOTION_TIME,
+    MACRO_LAST_PART_TIME,
+    MACRO_OPT_STOP,
     MACRO_PART_COUNT,
     MACRO_POWER_ON_TIME,
+    MACRO_PRESENT_PART_TIME,
+    MACRO_PREV_PART_TIME,
     MACRO_SPINDLE_LOAD,
     MACRO_SPINDLE_SPEED,
     MACRO_TOOL_DIAM_GEOM_START,
@@ -352,8 +356,6 @@ class MTConnectClient:
         data[KEY_EXECUTION] = items.get("execution") or items.get("exec")
         data[KEY_MODE] = items.get("mode") or items.get("cmode")
         data[KEY_PROGRAM] = items.get("program") or items.get("pgm")
-        data[KEY_BLOCK] = items.get("block")
-        data[KEY_LINE] = items.get("line")
 
         # Tool
         data[KEY_TOOL_NUMBER] = items.get("Tool_number") or items.get("tool_id") or items.get("tool_number")
@@ -384,9 +386,6 @@ class MTConnectClient:
         # Accumulated times (may be floating seconds or formatted)
         data[KEY_POWER_ON_TIME] = _safe_float(
             items.get("p1") or items.get("PowerOnTime") or items.get("power_on_time")
-        )
-        data[KEY_MOTION_TIME] = _safe_float(
-            items.get("motion_time") or items.get("MotionTime")
         )
         data[KEY_CYCLE_TIME] = _safe_float(
             items.get("cycle_time") or items.get("CycleTime")
@@ -769,6 +768,12 @@ class MDCClient:
         if results.get(KEY_COOLANT_LEVEL) is None:
             fast_macros[KEY_COOLANT_LEVEL] = MACRO_COOLANT_LEVEL
 
+        # Part timers & opt stop — always read from macros
+        fast_macros[KEY_PRESENT_PART_TIME] = MACRO_PRESENT_PART_TIME
+        fast_macros[KEY_LAST_PART_TIME] = MACRO_LAST_PART_TIME
+        fast_macros[KEY_PREV_PART_TIME] = MACRO_PREV_PART_TIME
+        fast_macros[KEY_OPT_STOP] = MACRO_OPT_STOP
+
         if fast_macros:
             macro_vals = await self.async_read_macros(fast_macros)
             results.update(macro_vals)
@@ -848,11 +853,10 @@ class MDCClient:
         slow_macros: dict[str, int | None] = {}
         slow_macros[KEY_POWER_ON_TIME] = MACRO_POWER_ON_TIME
         slow_macros[KEY_CYCLE_TIME] = MACRO_CYCLE_TIME
-        slow_macros[KEY_MOTION_TIME] = MACRO_MOTION_TIME
         if slow_macros:
             macro_vals = await self.async_read_macros(slow_macros)
             # HAAS timers are in milliseconds → convert to seconds
-            for k in (KEY_POWER_ON_TIME, KEY_CYCLE_TIME, KEY_MOTION_TIME):
+            for k in (KEY_POWER_ON_TIME, KEY_CYCLE_TIME):
                 if k in macro_vals and macro_vals[k] is not None:
                     results[k] = macro_vals[k] / 1000.0
 
@@ -956,7 +960,7 @@ class HaasApiClient:
                 combined.update(probe)
             if current:
                 # Extract only slow-changing items
-                for k in (KEY_POWER_ON_TIME, KEY_MOTION_TIME, KEY_CYCLE_TIME):
+                for k in (KEY_POWER_ON_TIME, KEY_CYCLE_TIME):
                     if current.get(k) is not None:
                         combined[k] = current[k]
             combined["_source"] = "mtconnect"

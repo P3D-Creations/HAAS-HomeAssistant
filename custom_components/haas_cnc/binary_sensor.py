@@ -30,6 +30,7 @@ from .const import (
     KEY_ALARM,
     KEY_AVAIL,
     KEY_EXECUTION,
+    KEY_OPT_STOP,
 )
 from .coordinator import HaasBaseCoordinator, _safe_get
 
@@ -74,6 +75,13 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[HaasBinarySensorEntityDescription, ...] = (
             _safe_get(d, KEY_ALARM) is not None
             and str(_safe_get(d, KEY_ALARM, "")).strip() not in ("", "NONE", "CLEAR", "NORMAL")
         ),
+    ),
+    HaasBinarySensorEntityDescription(
+        key="opt_stop",
+        name="Optional Stop",
+        icon="mdi:hand-back-right-outline",
+        coordinator_key=COORD_FAST,
+        is_on_fn=lambda d: _safe_get(d, KEY_OPT_STOP) == 1.0 or _safe_get(d, KEY_OPT_STOP) == 1,
     ),
 )
 
