@@ -3,22 +3,28 @@
     "step": {
       "user": {
         "title": "HAAS CNC Machine Monitor",
-        "description": "Configure connection to your HAAS machine via the Haas MQTT MTConnect Adapter.\n\nEnsure your MQTT broker is configured in Home Assistant and the adapter is running.",
+        "description": "Connect to your HAAS machine via MTConnect HTTP agent or MDC TCP interface.\n\nEnter the machine's IP address or hostname. The integration will try MTConnect first, then fall back to MDC (port 5051).",
         "data": {
+          "host": "Host / IP Address",
           "machine_name": "Machine Name",
-          "topic_prefix": "MQTT Topic Prefix"
+          "mtconnect_port": "MTConnect Agent Port",
+          "mdc_port": "MDC Port",
+          "mtconnect_device": "MTConnect Device Name"
         },
         "data_description": {
-          "machine_name": "A friendly name for your CNC machine (e.g. HAAS UMC500).",
-          "topic_prefix": "The MQTT topic prefix used by the adapter (default: haas/minimill/)."
+          "host": "IP address or hostname of the HAAS machine (e.g. 192.168.1.100).",
+          "machine_name": "A friendly name for your CNC machine (e.g. HAAS UMC-500).",
+          "mtconnect_port": "Port of the MTConnect HTTP agent (default: 5000).",
+          "mdc_port": "Port for MDC/Q-command interface (default: 5051). Requires Setting 143 = ON.",
+          "mtconnect_device": "MTConnect device name (leave blank to auto-detect first device)."
         }
       }
     },
     "error": {
-      "mqtt_not_available": "MQTT integration is not available. Please configure MQTT in Home Assistant first."
+      "cannot_connect": "Cannot connect to the HAAS machine. Verify the IP address and that MTConnect or MDC (Setting 143) is enabled."
     },
     "abort": {
-      "already_configured": "A machine with this topic prefix is already configured."
+      "already_configured": "A machine with this host is already configured."
     }
   },
   "options": {
@@ -26,90 +32,47 @@
       "init": {
         "title": "HAAS CNC Options",
         "data": {
-          "topic_prefix": "MQTT Topic Prefix"
+          "mtconnect_port": "MTConnect Agent Port",
+          "mdc_port": "MDC Port",
+          "mtconnect_device": "MTConnect Device Name"
         }
       }
     }
   },
   "entity": {
     "sensor": {
-      "execution": {
-        "name": "Execution State"
-      },
-      "mode": {
-        "name": "Operating Mode"
-      },
-      "program": {
-        "name": "Active Program"
-      },
-      "part_count": {
-        "name": "Part Count"
-      },
-      "x_act": {
-        "name": "X Position"
-      },
-      "y_act": {
-        "name": "Y Position"
-      },
-      "z_act": {
-        "name": "Z Position"
-      },
-      "a_act": {
-        "name": "A Axis Position"
-      },
-      "b_act": {
-        "name": "B Axis Position"
-      },
-      "speed": {
-        "name": "Spindle Speed"
-      },
-      "load": {
-        "name": "Spindle Load"
-      },
-      "coolant_level": {
-        "name": "Coolant Level"
-      },
-      "air_pressure": {
-        "name": "Air Pressure"
-      },
-      "tool": {
-        "name": "Tool in Spindle"
-      },
-      "tool_length": {
-        "name": "Tool Length Offset"
-      },
-      "tool_diameter": {
-        "name": "Tool Diameter Offset"
-      },
-      "work_offset": {
-        "name": "Active Work Offset"
-      },
-      "alarm": {
-        "name": "Alarm"
-      },
-      "alarm_code": {
-        "name": "Alarm Code"
-      },
-      "cycle_time": {
-        "name": "Cycle Time"
-      },
-      "run_time": {
-        "name": "Run Time"
-      },
-      "adapter_timestamp": {
-        "name": "Adapter Timestamp"
-      }
+      "execution": { "name": "Execution State" },
+      "mode": { "name": "Operating Mode" },
+      "program": { "name": "Active Program" },
+      "block": { "name": "Current Block" },
+      "line": { "name": "Line Number" },
+      "x_act": { "name": "X Position" },
+      "y_act": { "name": "Y Position" },
+      "z_act": { "name": "Z Position" },
+      "a_act": { "name": "A Axis Position" },
+      "b_act": { "name": "B Axis Position" },
+      "spindle_speed": { "name": "Spindle Speed" },
+      "spindle_load": { "name": "Spindle Load" },
+      "path_feedrate": { "name": "Path Feedrate" },
+      "tool_number": { "name": "Tool in Spindle" },
+      "tool_length": { "name": "Tool Length Offset" },
+      "tool_diameter": { "name": "Tool Diameter Offset" },
+      "work_offset": { "name": "Active Work Offset" },
+      "part_count": { "name": "Part Count" },
+      "coolant_level": { "name": "Coolant Level" },
+      "alarm": { "name": "Alarm" },
+      "alarm_code": { "name": "Alarm Code" },
+      "serial_number": { "name": "Serial Number" },
+      "model": { "name": "Model" },
+      "software_version": { "name": "Software Version" },
+      "power_on_time": { "name": "Power-On Time" },
+      "motion_time": { "name": "Motion Time" },
+      "cycle_time": { "name": "Cycle Time" }
     },
     "binary_sensor": {
-      "available": {
-        "name": "Machine Available"
-      },
-      "running": {
-        "name": "Running"
-      },
-      "alarm_active": {
-        "name": "Alarm Active"
-      }
+      "available": { "name": "Machine Available" },
+      "running": { "name": "Running" },
+      "alarm_active": { "name": "Alarm Active" }
     }
   }
 }

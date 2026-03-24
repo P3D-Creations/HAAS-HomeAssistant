@@ -1,14 +1,15 @@
 """Sensor platform for HAAS CNC Machine Monitor.
 
-Each sensor maps to one MQTT sub-topic published by the
-Haas MQTT MTConnect Adapter.  Sensors are grouped by update
-frequency so future polling logic (if needed) can be targeted.
+Each sensor is bound to a coordinator tier (fast / medium / slow) and
+extracts its value from the coordinator's ``data`` dict via a
+``value_fn`` lambda.  Entity descriptions are frozen dataclasses for
+safety and clarity.
 """
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -23,286 +24,325 @@ from homeassistant.const import (
     REVOLUTIONS_PER_MINUTE,
     UnitOfLength,
     UnitOfTime,
+    UnitOfSpeed,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    ATTR_DATA_SOURCE,
     ATTR_LAST_UPDATE,
-    ATTR_TOPIC_PREFIX,
+    CONF_HOST,
     CONF_MACHINE_NAME,
-    CONF_TOPIC_PREFIX,
+    COORD_FAST,
+    COORD_MEDIUM,
+    COORD_SLOW,
     DEFAULT_MACHINE_NAME,
-    DEFAULT_TOPIC_PREFIX,
     DOMAIN,
-    TOPIC_A_ACT,
-    TOPIC_AIR_PRESSURE,
-    TOPIC_ALARM,
-    TOPIC_ALARM_CODE,
-    TOPIC_B_ACT,
-    TOPIC_COOLANT_LEVEL,
-    TOPIC_CYCLE_TIME,
-    TOPIC_EXECUTION,
-    TOPIC_LOAD,
-    TOPIC_MODE,
-    TOPIC_PART_COUNT,
-    TOPIC_PROGRAM,
-    TOPIC_RUN_TIME,
-    TOPIC_SPEED,
-    TOPIC_TIMESTAMP,
-    TOPIC_TOOL,
-    TOPIC_TOOL_DIAMETER,
-    TOPIC_TOOL_LENGTH,
-    TOPIC_WORK_OFFSET,
-    TOPIC_X_ACT,
-    TOPIC_Y_ACT,
-    TOPIC_Z_ACT,
-    UPDATE_GROUP_REALTIME,
-    UPDATE_GROUP_SLOW,
-    UPDATE_GROUP_STANDARD,
+    KEY_A_ACT,
+    KEY_ALARM,
+    KEY_ALARM_CODE,
+    KEY_B_ACT,
+    KEY_BLOCK,
+    KEY_COOLANT_LEVEL,
+    KEY_CYCLE_TIME,
+    KEY_EXECUTION,
+    KEY_LINE,
+    KEY_MODE,
+    KEY_MODEL,
+    KEY_MOTION_TIME,
+    KEY_PART_COUNT,
+    KEY_PATH_FEEDRATE,
+    KEY_POWER_ON_TIME,
+    KEY_PROGRAM,
+    KEY_SERIAL,
+    KEY_SOFTWARE_VERSION,
+    KEY_SPINDLE_LOAD,
+    KEY_SPINDLE_SPEED,
+    KEY_TOOL_DIAMETER,
+    KEY_TOOL_LENGTH,
+    KEY_TOOL_NUMBER,
+    KEY_WORK_OFFSET,
+    KEY_X_ACT,
+    KEY_Y_ACT,
+    KEY_Z_ACT,
 )
-from .coordinator import HaasDataCoordinator
+from .coordinator import HaasBaseCoordinator, _safe_get
 
 _LOGGER = logging.getLogger(__name__)
 
 
-@dataclass
+# ======================================================================
+# Entity description dataclass
+# ======================================================================
+
+@dataclass(frozen=True)
 class HaasSensorEntityDescription(SensorEntityDescription):
-    """Extends SensorEntityDescription with HAAS-specific fields."""
+    """Extends SensorEntityDescription with coordinator binding."""
 
-    subtopic: str = ""
-    update_group: str = UPDATE_GROUP_REALTIME
-    # Optional transform applied to raw MQTT payload before setting state
-    value_fn: Callable[[str], Any] | None = None
-    # Extra attributes added to the entity (lambdas receive coordinator)
-    extra_attrs_fn: Callable[[HaasDataCoordinator], dict[str, Any]] | None = None
+    coordinator_key: str = COORD_FAST
+    value_fn: Callable[[dict[str, Any]], Any] = lambda d: None
+    attributes_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 
 
-# ---------------------------------------------------------------------------
+# ======================================================================
 # Sensor descriptions
-# Each entry maps directly to one MQTT subtopic.
-# ---------------------------------------------------------------------------
-SENSOR_DESCRIPTIONS: list[HaasSensorEntityDescription] = [
-    # --- Program / Execution ---
+# ======================================================================
+
+SENSOR_DESCRIPTIONS: tuple[HaasSensorEntityDescription, ...] = (
+    # ---- Fast tier: execution / positions / spindle ----
     HaasSensorEntityDescription(
         key="execution",
-        subtopic=TOPIC_EXECUTION,
         name="Execution State",
         icon="mdi:play-circle-outline",
-        update_group=UPDATE_GROUP_REALTIME,
+        coordinator_key=COORD_FAST,
+        value_fn=lambda d: _safe_get(d, KEY_EXECUTION),
     ),
     HaasSensorEntityDescription(
         key="mode",
-        subtopic=TOPIC_MODE,
         name="Operating Mode",
         icon="mdi:cog-outline",
-        update_group=UPDATE_GROUP_REALTIME,
+        coordinator_key=COORD_FAST,
+        value_fn=lambda d: _safe_get(d, KEY_MODE),
     ),
     HaasSensorEntityDescription(
         key="program",
-        subtopic=TOPIC_PROGRAM,
         name="Active Program",
         icon="mdi:file-code-outline",
-        update_group=UPDATE_GROUP_REALTIME,
+        coordinator_key=COORD_FAST,
+        value_fn=lambda d: _safe_get(d, KEY_PROGRAM),
     ),
     HaasSensorEntityDescription(
-        key="part_count",
-        subtopic=TOPIC_PART_COUNT,
-        name="Part Count",
-        icon="mdi:counter",
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        update_group=UPDATE_GROUP_REALTIME,
-        value_fn=lambda v: int(float(v)) if v else None,
+        key="block",
+        name="Current Block",
+        icon="mdi:code-braces",
+        coordinator_key=COORD_FAST,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: _safe_get(d, KEY_BLOCK),
     ),
-    # --- Axis Positions ---
+    HaasSensorEntityDescription(
+        key="line",
+        name="Line Number",
+        icon="mdi:format-list-numbered",
+        coordinator_key=COORD_FAST,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: _safe_get(d, KEY_LINE),
+    ),
+    # Axis positions
     HaasSensorEntityDescription(
         key="x_act",
-        subtopic=TOPIC_X_ACT,
         name="X Position",
         icon="mdi:axis-x-arrow",
         native_unit_of_measurement=UnitOfLength.MILLIMETERS,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=3,
-        update_group=UPDATE_GROUP_REALTIME,
-        value_fn=lambda v: float(v) if v else None,
+        coordinator_key=COORD_FAST,
+        value_fn=lambda d: _safe_get(d, KEY_X_ACT),
     ),
     HaasSensorEntityDescription(
         key="y_act",
-        subtopic=TOPIC_Y_ACT,
         name="Y Position",
         icon="mdi:axis-y-arrow",
         native_unit_of_measurement=UnitOfLength.MILLIMETERS,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=3,
-        update_group=UPDATE_GROUP_REALTIME,
-        value_fn=lambda v: float(v) if v else None,
+        coordinator_key=COORD_FAST,
+        value_fn=lambda d: _safe_get(d, KEY_Y_ACT),
     ),
     HaasSensorEntityDescription(
         key="z_act",
-        subtopic=TOPIC_Z_ACT,
         name="Z Position",
         icon="mdi:axis-z-arrow",
         native_unit_of_measurement=UnitOfLength.MILLIMETERS,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=3,
-        update_group=UPDATE_GROUP_REALTIME,
-        value_fn=lambda v: float(v) if v else None,
+        coordinator_key=COORD_FAST,
+        value_fn=lambda d: _safe_get(d, KEY_Z_ACT),
     ),
     HaasSensorEntityDescription(
         key="a_act",
-        subtopic=TOPIC_A_ACT,
         name="A Axis Position",
         icon="mdi:rotate-3d-variant",
         native_unit_of_measurement="°",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=3,
-        update_group=UPDATE_GROUP_REALTIME,
-        value_fn=lambda v: float(v) if v else None,
+        coordinator_key=COORD_FAST,
+        value_fn=lambda d: _safe_get(d, KEY_A_ACT),
     ),
     HaasSensorEntityDescription(
         key="b_act",
-        subtopic=TOPIC_B_ACT,
         name="B Axis Position",
         icon="mdi:rotate-3d-variant",
         native_unit_of_measurement="°",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=3,
-        update_group=UPDATE_GROUP_REALTIME,
-        value_fn=lambda v: float(v) if v else None,
+        coordinator_key=COORD_FAST,
+        value_fn=lambda d: _safe_get(d, KEY_B_ACT),
     ),
-    # --- Spindle ---
+    # Spindle
     HaasSensorEntityDescription(
-        key="speed",
-        subtopic=TOPIC_SPEED,
+        key="spindle_speed",
         name="Spindle Speed",
         icon="mdi:rotate-right",
         native_unit_of_measurement=REVOLUTIONS_PER_MINUTE,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=0,
-        update_group=UPDATE_GROUP_REALTIME,
-        value_fn=lambda v: float(v) if v else None,
+        coordinator_key=COORD_FAST,
+        value_fn=lambda d: _safe_get(d, KEY_SPINDLE_SPEED),
     ),
     HaasSensorEntityDescription(
-        key="load",
-        subtopic=TOPIC_LOAD,
+        key="spindle_load",
         name="Spindle Load",
         icon="mdi:gauge",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=1,
-        update_group=UPDATE_GROUP_REALTIME,
-        value_fn=lambda v: float(v) if v else None,
+        coordinator_key=COORD_FAST,
+        value_fn=lambda d: _safe_get(d, KEY_SPINDLE_LOAD),
     ),
-    # --- Fluids / Environment ---
     HaasSensorEntityDescription(
-        key="coolant_level",
-        subtopic=TOPIC_COOLANT_LEVEL,
-        name="Coolant Level",
-        icon="mdi:water-percent",
+        key="path_feedrate",
+        name="Path Feedrate",
+        icon="mdi:speedometer",
+        native_unit_of_measurement="mm/min",
         state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=1,
-        update_group=UPDATE_GROUP_REALTIME,
-        value_fn=lambda v: float(v) if v else None,
+        suggested_display_precision=0,
+        coordinator_key=COORD_FAST,
+        value_fn=lambda d: _safe_get(d, KEY_PATH_FEEDRATE),
     ),
+
+    # ---- Medium tier: tool / offsets / part count / alarms ----
     HaasSensorEntityDescription(
-        key="air_pressure",
-        subtopic=TOPIC_AIR_PRESSURE,
-        name="Air Pressure",
-        icon="mdi:air-filter",
-        device_class=SensorDeviceClass.PRESSURE,
-        state_class=SensorStateClass.MEASUREMENT,
-        update_group=UPDATE_GROUP_REALTIME,
-        value_fn=lambda v: float(v) if v else None,
-    ),
-    # --- Tool Information ---
-    HaasSensorEntityDescription(
-        key="tool",
-        subtopic=TOPIC_TOOL,
+        key="tool_number",
         name="Tool in Spindle",
         icon="mdi:tools",
-        update_group=UPDATE_GROUP_STANDARD,
-        value_fn=lambda v: int(float(v)) if v else None,
+        coordinator_key=COORD_MEDIUM,
+        value_fn=lambda d: _safe_get(d, KEY_TOOL_NUMBER),
     ),
     HaasSensorEntityDescription(
         key="tool_length",
-        subtopic=TOPIC_TOOL_LENGTH,
         name="Tool Length Offset",
         icon="mdi:ruler",
         native_unit_of_measurement=UnitOfLength.MILLIMETERS,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
-        update_group=UPDATE_GROUP_STANDARD,
-        value_fn=lambda v: float(v) if v else None,
+        coordinator_key=COORD_MEDIUM,
+        value_fn=lambda d: _safe_get(d, KEY_TOOL_LENGTH),
     ),
     HaasSensorEntityDescription(
         key="tool_diameter",
-        subtopic=TOPIC_TOOL_DIAMETER,
         name="Tool Diameter Offset",
         icon="mdi:diameter-variant",
         native_unit_of_measurement=UnitOfLength.MILLIMETERS,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
-        update_group=UPDATE_GROUP_STANDARD,
-        value_fn=lambda v: float(v) if v else None,
+        coordinator_key=COORD_MEDIUM,
+        value_fn=lambda d: _safe_get(d, KEY_TOOL_DIAMETER),
     ),
     HaasSensorEntityDescription(
         key="work_offset",
-        subtopic=TOPIC_WORK_OFFSET,
         name="Active Work Offset",
         icon="mdi:crosshairs-gps",
-        update_group=UPDATE_GROUP_STANDARD,
+        coordinator_key=COORD_MEDIUM,
+        value_fn=lambda d: _safe_get(d, KEY_WORK_OFFSET),
     ),
-    # --- Alarms ---
+    HaasSensorEntityDescription(
+        key="part_count",
+        name="Part Count",
+        icon="mdi:counter",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        coordinator_key=COORD_MEDIUM,
+        value_fn=lambda d: _safe_get(d, KEY_PART_COUNT),
+    ),
+    HaasSensorEntityDescription(
+        key="coolant_level",
+        name="Coolant Level",
+        icon="mdi:water-percent",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        coordinator_key=COORD_MEDIUM,
+        value_fn=lambda d: _safe_get(d, KEY_COOLANT_LEVEL),
+    ),
     HaasSensorEntityDescription(
         key="alarm",
-        subtopic=TOPIC_ALARM,
         name="Alarm",
         icon="mdi:alarm-light",
-        update_group=UPDATE_GROUP_REALTIME,
+        coordinator_key=COORD_MEDIUM,
+        value_fn=lambda d: _safe_get(d, KEY_ALARM),
     ),
     HaasSensorEntityDescription(
         key="alarm_code",
-        subtopic=TOPIC_ALARM_CODE,
         name="Alarm Code",
         icon="mdi:alert-circle-outline",
-        update_group=UPDATE_GROUP_REALTIME,
+        coordinator_key=COORD_MEDIUM,
+        value_fn=lambda d: _safe_get(d, KEY_ALARM_CODE),
     ),
-    # --- Timing ---
+
+    # ---- Slow tier: machine identity / accumulated times ----
+    HaasSensorEntityDescription(
+        key="serial_number",
+        name="Serial Number",
+        icon="mdi:identifier",
+        coordinator_key=COORD_SLOW,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: _safe_get(d, KEY_SERIAL),
+    ),
+    HaasSensorEntityDescription(
+        key="model",
+        name="Model",
+        icon="mdi:factory",
+        coordinator_key=COORD_SLOW,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: _safe_get(d, KEY_MODEL),
+    ),
+    HaasSensorEntityDescription(
+        key="software_version",
+        name="Software Version",
+        icon="mdi:chip",
+        coordinator_key=COORD_SLOW,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: _safe_get(d, KEY_SOFTWARE_VERSION),
+    ),
+    HaasSensorEntityDescription(
+        key="power_on_time",
+        name="Power-On Time",
+        icon="mdi:clock-start",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        coordinator_key=COORD_SLOW,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: _safe_get(d, KEY_POWER_ON_TIME),
+    ),
+    HaasSensorEntityDescription(
+        key="motion_time",
+        name="Motion Time",
+        icon="mdi:timer-outline",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        coordinator_key=COORD_SLOW,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: _safe_get(d, KEY_MOTION_TIME),
+    ),
     HaasSensorEntityDescription(
         key="cycle_time",
-        subtopic=TOPIC_CYCLE_TIME,
         name="Cycle Time",
         icon="mdi:timer-outline",
         native_unit_of_measurement=UnitOfTime.SECONDS,
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.MEASUREMENT,
-        update_group=UPDATE_GROUP_REALTIME,
-        value_fn=lambda v: float(v) if v else None,
+        coordinator_key=COORD_SLOW,
+        value_fn=lambda d: _safe_get(d, KEY_CYCLE_TIME),
     ),
-    HaasSensorEntityDescription(
-        key="run_time",
-        subtopic=TOPIC_RUN_TIME,
-        name="Run Time",
-        icon="mdi:clock-start",
-        native_unit_of_measurement=UnitOfTime.SECONDS,
-        device_class=SensorDeviceClass.DURATION,
-        state_class=SensorStateClass.MEASUREMENT,
-        update_group=UPDATE_GROUP_REALTIME,
-        value_fn=lambda v: float(v) if v else None,
-    ),
-    # --- Raw timestamp from adapter ---
-    HaasSensorEntityDescription(
-        key="adapter_timestamp",
-        subtopic=TOPIC_TIMESTAMP,
-        name="Adapter Timestamp",
-        icon="mdi:clock-outline",
-        device_class=SensorDeviceClass.TIMESTAMP,
-        entity_registry_enabled_default=False,
-        update_group=UPDATE_GROUP_REALTIME,
-    ),
-]
+)
 
+
+# ======================================================================
+# Platform setup
+# ======================================================================
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -310,105 +350,78 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up HAAS CNC sensors from a config entry."""
-    coordinator: HaasDataCoordinator = hass.data[DOMAIN][entry.entry_id]
+    entry_data = hass.data[DOMAIN][entry.entry_id]
     machine_name: str = entry.data.get(CONF_MACHINE_NAME, DEFAULT_MACHINE_NAME)
-    topic_prefix: str = entry.data.get(CONF_TOPIC_PREFIX, DEFAULT_TOPIC_PREFIX)
+    host: str = entry.data[CONF_HOST]
+
+    coordinators: dict[str, HaasBaseCoordinator] = {
+        COORD_FAST: entry_data[COORD_FAST],
+        COORD_MEDIUM: entry_data[COORD_MEDIUM],
+        COORD_SLOW: entry_data[COORD_SLOW],
+    }
 
     entities = [
-        HaasCncSensor(coordinator, description, machine_name, topic_prefix)
-        for description in SENSOR_DESCRIPTIONS
+        HaasCncSensor(
+            coordinator=coordinators[desc.coordinator_key],
+            description=desc,
+            machine_name=machine_name,
+            host=host,
+        )
+        for desc in SENSOR_DESCRIPTIONS
     ]
     async_add_entities(entities)
 
 
-class HaasCncSensor(SensorEntity):
+# ======================================================================
+# Sensor entity
+# ======================================================================
+
+class HaasCncSensor(CoordinatorEntity[HaasBaseCoordinator], SensorEntity):
     """Representation of a HAAS CNC sensor entity."""
 
     entity_description: HaasSensorEntityDescription
     _attr_has_entity_name = True
-    _attr_should_poll = False
 
     def __init__(
         self,
-        coordinator: HaasDataCoordinator,
+        coordinator: HaasBaseCoordinator,
         description: HaasSensorEntityDescription,
         machine_name: str,
-        topic_prefix: str,
+        host: str,
     ) -> None:
         """Initialise the sensor."""
+        super().__init__(coordinator)
         self.entity_description = description
-        self._coordinator = coordinator
         self._machine_name = machine_name
-        self._topic_prefix = topic_prefix
-        self._unsubscribe: Callable[[], None] | None = None
+        self._host = host
 
-        self._attr_unique_id = (
-            f"{topic_prefix.rstrip('/')}_{description.key}"
-        )
+        self._attr_unique_id = f"{host}_{description.key}"
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, topic_prefix.rstrip("/"))},
+            identifiers={(DOMAIN, host)},
             name=machine_name,
             manufacturer="Haas Automation",
             model="UMC-500",
             sw_version="NGC",
         )
 
-    # ------------------------------------------------------------------
-    # HA lifecycle
-    # ------------------------------------------------------------------
-
-    async def async_added_to_hass(self) -> None:
-        """Register with the coordinator when added to HA."""
-        self._unsubscribe = self._coordinator.register_callback(
-            self.entity_description.subtopic, self._handle_update
-        )
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Clean up subscription when removed."""
-        if self._unsubscribe:
-            self._unsubscribe()
-
-    # ------------------------------------------------------------------
-    # State
-    # ------------------------------------------------------------------
-
-    @callback
-    def _handle_update(self) -> None:
-        """Called by coordinator when our subtopic has a new value."""
-        self.async_write_ha_state()
-
-    @property
-    def available(self) -> bool:
-        """Entity is available when the coordinator has received at least one update."""
-        return self._coordinator.data.get(self.entity_description.subtopic) is not None
-
     @property
     def native_value(self) -> Any:
-        """Return the sensor value, applying optional transform."""
-        raw = self._coordinator.get(self.entity_description.subtopic)
-        if raw is None:
+        """Return the sensor value."""
+        if self.coordinator.data is None:
             return None
         try:
-            if self.entity_description.value_fn:
-                return self.entity_description.value_fn(raw)
-            return raw
-        except (ValueError, TypeError):
-            _LOGGER.warning(
-                "[%s] Could not parse value %r for %s",
-                self._machine_name,
-                raw,
-                self.entity_description.key,
-            )
+            return self.entity_description.value_fn(self.coordinator.data)
+        except (KeyError, TypeError, ValueError):
             return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
-        attrs: dict[str, Any] = {
-            ATTR_TOPIC_PREFIX: self._topic_prefix,
-        }
-        if self._coordinator.last_update:
-            attrs[ATTR_LAST_UPDATE] = self._coordinator.last_update.isoformat()
-        if self.entity_description.extra_attrs_fn:
-            attrs.update(self.entity_description.extra_attrs_fn(self._coordinator))
+        attrs: dict[str, Any] = {}
+        if self.coordinator.data:
+            attrs[ATTR_DATA_SOURCE] = self.coordinator.data.get("_source", "unknown")
+        if self.coordinator.last_update_success_time:
+            attrs[ATTR_LAST_UPDATE] = self.coordinator.last_update_success_time.isoformat()
+        if self.entity_description.attributes_fn and self.coordinator.data:
+            attrs.update(self.entity_description.attributes_fn(self.coordinator.data))
         return attrs

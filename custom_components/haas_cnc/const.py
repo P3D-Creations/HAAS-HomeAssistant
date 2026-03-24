@@ -1,70 +1,88 @@
-"""Constants for the HAAS CNC Machine Monitor integration."""
+"""Constants for the HAAS CNC Machine Monitor integration.
+
+Data sources:
+  - Primary:  MTConnect HTTP Agent (/current, /probe, /sample endpoints)
+  - Fallback: MDC TCP socket (port 5051, ?Q commands)
+"""
+from __future__ import annotations
 
 DOMAIN = "haas_cnc"
 DEFAULT_NAME = "HAAS CNC"
 
-# Configuration keys
-CONF_TOPIC_PREFIX = "topic_prefix"
+# ---------------------------------------------------------------------------
+# Configuration keys (config_flow / options)
+# ---------------------------------------------------------------------------
+CONF_HOST = "host"
 CONF_MACHINE_NAME = "machine_name"
+CONF_MTCONNECT_PORT = "mtconnect_port"
+CONF_MDC_PORT = "mdc_port"
+CONF_MTCONNECT_DEVICE = "mtconnect_device"  # device name in MTConnect agent
 
 # Defaults
-DEFAULT_TOPIC_PREFIX = "haas/minimill/"
-DEFAULT_MACHINE_NAME = "HAAS UMC500"
+DEFAULT_MACHINE_NAME = "HAAS UMC-500"
+DEFAULT_MTCONNECT_PORT = 5000
+DEFAULT_MDC_PORT = 5051
+DEFAULT_MTCONNECT_DEVICE = ""  # empty = auto-detect first device
 
-# Update interval groups (seconds)
-# Real-time: machine status, execution, axis positions, sensor data
-UPDATE_INTERVAL_REALTIME = 1
-# Standard: tool info, work offsets
-UPDATE_INTERVAL_STANDARD = 10
-# Slow: administrative info (software version, etc.)
-UPDATE_INTERVAL_SLOW = 3600
+# ---------------------------------------------------------------------------
+# Coordinator keys (tiers)
+# ---------------------------------------------------------------------------
+COORD_FAST = "fast"          # ~2 s – status, execution, positions, spindle
+COORD_MEDIUM = "medium"      # ~10 s – tool info, work offsets, part count
+COORD_SLOW = "slow"          # ~600 s – machine identity, versions
 
-# MQTT sub-topics published by the Haas MQTT MTConnect Adapter
-TOPIC_AVAIL = "avail"
-TOPIC_MODE = "mode"
-TOPIC_EXECUTION = "execution"
-TOPIC_PROGRAM = "program"
-TOPIC_PART_COUNT = "part_count"
-TOPIC_X_ACT = "x_act"
-TOPIC_Y_ACT = "y_act"
-TOPIC_Z_ACT = "z_act"
-TOPIC_POSITION = "position"
-TOPIC_SPEED = "speed"
-TOPIC_COOLANT_LEVEL = "coolant_level"
-TOPIC_LOAD = "load"
-TOPIC_TOOL = "tool"
-TOPIC_TIMESTAMP = "timestamp"
+# Update intervals (seconds)
+UPDATE_INTERVAL_FAST = 2
+UPDATE_INTERVAL_MEDIUM = 10
+UPDATE_INTERVAL_SLOW = 600
 
-# --- Extended subtopics (requires expanded MQTT publisher) ---
-# Alarm / error
-TOPIC_ALARM = "alarm"
-TOPIC_ALARM_CODE = "alarm_code"
-# A and B axes (5 axis machine)
-TOPIC_A_ACT = "a_act"
-TOPIC_B_ACT = "b_act"
-# Tool geometry (tool length/diameter offsets; Q600 macro variables)
-TOPIC_TOOL_LENGTH = "tool_length"
-TOPIC_TOOL_DIAMETER = "tool_diameter"
-# Work coordinate offset (active WCS)
-TOPIC_WORK_OFFSET = "work_offset"
-# Air pressure / pallet changer
-TOPIC_AIR_PRESSURE = "air_pressure"
-# Cycle time / run time (calculated by adapter or HA side)
-TOPIC_CYCLE_TIME = "cycle_time"
-TOPIC_RUN_TIME = "run_time"
+# ---------------------------------------------------------------------------
+# Data dictionary keys  (populated by api.py, consumed by entities)
+# ---------------------------------------------------------------------------
+# MTConnect data-item names (from HAAS MTConnect device model)
+# Fast tier
+KEY_AVAIL = "avail"
+KEY_EXECUTION = "execution"
+KEY_MODE = "mode"
+KEY_PROGRAM = "program"
+KEY_X_ACT = "x_act"
+KEY_Y_ACT = "y_act"
+KEY_Z_ACT = "z_act"
+KEY_A_ACT = "a_act"
+KEY_B_ACT = "b_act"
+KEY_SPINDLE_SPEED = "spindle_speed"
+KEY_SPINDLE_LOAD = "spindle_load"
+KEY_PATH_FEEDRATE = "path_feedrate"
+KEY_BLOCK = "block"                    # current G-code block
+KEY_LINE = "line"                      # current line number
 
-# Signal groups - used to determine what data an entity depends on
-SIGNAL_UPDATE_ENTITY = f"{DOMAIN}_update"
+# Medium tier
+KEY_TOOL_NUMBER = "tool_number"
+KEY_TOOL_LENGTH = "tool_length"
+KEY_TOOL_DIAMETER = "tool_diameter"
+KEY_WORK_OFFSET = "work_offset"
+KEY_PART_COUNT = "part_count"
+KEY_COOLANT_LEVEL = "coolant_level"
+KEY_ALARM = "alarm"
+KEY_ALARM_CODE = "alarm_code"
 
-# Entity update groups
-UPDATE_GROUP_REALTIME = "realtime"     # ~1 s: status, positions, speeds, load
-UPDATE_GROUP_STANDARD = "standard"    # ~10 s: tool info, offsets
-UPDATE_GROUP_SLOW = "slow"            # ~1 h: static info
+# Slow tier
+KEY_SERIAL = "serial_number"
+KEY_MODEL = "model"
+KEY_SOFTWARE_VERSION = "software_version"
+KEY_POWER_ON_TIME = "power_on_time"     # accumulated hours
+KEY_MOTION_TIME = "motion_time"         # accumulated hours
+KEY_CYCLE_TIME = "cycle_time"
 
-# State values returned by the adapter
+# Derived / MDC-only keys
+KEY_MDC_STATUS = "mdc_status"          # IDLE / BUSY / ALARM from ?Q500
+KEY_CYCLE_COUNT = "cycle_count"
+
+# ---------------------------------------------------------------------------
+# MTConnect execution & availability states
+# ---------------------------------------------------------------------------
 EXECUTION_IDLE = "IDLE"
 EXECUTION_ACTIVE = "ACTIVE"
-EXECUTION_PROGRAM = "PROGRAM"
 EXECUTION_FEED_HOLD = "FEED_HOLD"
 EXECUTION_STOPPED = "STOPPED"
 EXECUTION_READY = "READY"
@@ -74,18 +92,26 @@ EXECUTION_WAIT = "WAIT"
 AVAIL_AVAILABLE = "AVAILABLE"
 AVAIL_UNAVAILABLE = "UNAVAILABLE"
 
-# Attributes
-ATTR_PROGRAM = "program"
-ATTR_EXECUTION = "execution"
-ATTR_PART_COUNT = "part_count"
-ATTR_POSITION_X = "x"
-ATTR_POSITION_Y = "y"
-ATTR_POSITION_Z = "z"
-ATTR_POSITION_A = "a"
-ATTR_POSITION_B = "b"
-ATTR_TOOL_NUMBER = "tool_number"
-ATTR_SPINDLE_SPEED = "spindle_speed"
-ATTR_SPINDLE_LOAD = "spindle_load"
-ATTR_COOLANT_LEVEL = "coolant_level"
+# ---------------------------------------------------------------------------
+# MDC ?Q command identifiers
+# ---------------------------------------------------------------------------
+MDC_Q100 = "?Q100"   # Serial, software version, model
+MDC_Q104 = "?Q104"   # Operating mode
+MDC_Q200 = "?Q200"   # Tool change info (previous, current, next)
+MDC_Q300 = "?Q300"   # Coordinates + spindle RPM/load
+MDC_Q500 = "?Q500"   # Machine status (IDLE / BUSY / ALARM)
+MDC_Q600 = "?Q600"   # Macro variable read
+
+# HAAS macro variable ranges (for reference & MDC queries)
+MACRO_TOOL_LENGTH_GEOM_START = 2001      # #2001-#2200
+MACRO_TOOL_LENGTH_WEAR_START = 2201      # #2201-#2400
+MACRO_TOOL_DIAM_GEOM_START = 2401        # #2401-#2600
+MACRO_TOOL_DIAM_WEAR_START = 2601        # #2601-#2800
+MACRO_WORK_OFFSET_BASE = 5221            # G54 X,Y,Z,A,B,C (#5221-#5226)
+MACRO_POSITION_START = 5021              # Current position #5021-#5026
+
+# ---------------------------------------------------------------------------
+# Extra entity attributes
+# ---------------------------------------------------------------------------
+ATTR_DATA_SOURCE = "data_source"        # "mtconnect" or "mdc"
 ATTR_LAST_UPDATE = "last_update"
-ATTR_TOPIC_PREFIX = "topic_prefix"

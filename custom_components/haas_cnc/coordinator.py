@@ -1,207 +1,148 @@
-"""MQTT Data Coordinator for HAAS CNC integration.
+"""Data coordinators for HAAS CNC integration.
 
-Subscribes to all relevant MQTT topics published by the
-Haas MQTT MTConnect Adapter and stores the latest values.
-Entities register callbacks here to receive live updates
-without polling.
+Three ``DataUpdateCoordinator`` tiers fetch machine data at different
+intervals through the unified ``HaasApiClient``:
+
+  - **Fast**  (~2 s): execution state, axis positions, spindle, feedrate
+  - **Medium** (~10 s): tool info, work offset, part count, alarms, mode
+  - **Slow**  (~600 s): serial number, model, software version, accum. times
 """
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from datetime import datetime
+from datetime import timedelta
+from typing import Any
 
-from homeassistant.components import mqtt
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .api import HaasApiClient
 from .const import (
+    COORD_FAST,
+    COORD_MEDIUM,
+    COORD_SLOW,
     DOMAIN,
-    TOPIC_AVAIL,
-    TOPIC_MODE,
-    TOPIC_EXECUTION,
-    TOPIC_PROGRAM,
-    TOPIC_PART_COUNT,
-    TOPIC_X_ACT,
-    TOPIC_Y_ACT,
-    TOPIC_Z_ACT,
-    TOPIC_POSITION,
-    TOPIC_SPEED,
-    TOPIC_COOLANT_LEVEL,
-    TOPIC_LOAD,
-    TOPIC_TOOL,
-    TOPIC_TIMESTAMP,
-    TOPIC_ALARM,
-    TOPIC_ALARM_CODE,
-    TOPIC_A_ACT,
-    TOPIC_B_ACT,
-    TOPIC_TOOL_LENGTH,
-    TOPIC_TOOL_DIAMETER,
-    TOPIC_WORK_OFFSET,
-    TOPIC_AIR_PRESSURE,
-    TOPIC_CYCLE_TIME,
-    TOPIC_RUN_TIME,
-    AVAIL_AVAILABLE,
+    UPDATE_INTERVAL_FAST,
+    UPDATE_INTERVAL_MEDIUM,
+    UPDATE_INTERVAL_SLOW,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-# All sub-topics the coordinator subscribes to
-ALL_TOPICS = [
-    TOPIC_AVAIL,
-    TOPIC_MODE,
-    TOPIC_EXECUTION,
-    TOPIC_PROGRAM,
-    TOPIC_PART_COUNT,
-    TOPIC_X_ACT,
-    TOPIC_Y_ACT,
-    TOPIC_Z_ACT,
-    TOPIC_POSITION,
-    TOPIC_SPEED,
-    TOPIC_COOLANT_LEVEL,
-    TOPIC_LOAD,
-    TOPIC_TOOL,
-    TOPIC_TIMESTAMP,
-    TOPIC_ALARM,
-    TOPIC_ALARM_CODE,
-    TOPIC_A_ACT,
-    TOPIC_B_ACT,
-    TOPIC_TOOL_LENGTH,
-    TOPIC_TOOL_DIAMETER,
-    TOPIC_WORK_OFFSET,
-    TOPIC_AIR_PRESSURE,
-    TOPIC_CYCLE_TIME,
-    TOPIC_RUN_TIME,
-]
+# Retry MTConnect every N slow-tier cycles (600 s × 5 = ~50 min)
+_MTCONNECT_RETRY_CYCLES = 5
 
 
-class HaasDataCoordinator:
-    """Central coordinator for HAAS machine data via MQTT.
+# ======================================================================
+# Safe accessor for entity value_fn lambdas
+# ======================================================================
 
-    All sensor and binary_sensor entities register a callback with this
-    coordinator.  When a matching MQTT message arrives the coordinator
-    stores the value and invokes the registered callbacks so entities can
-    update their state without any polling.
-    """
+def _safe_get(data: dict[str, Any] | None, key: str, default: Any = None) -> Any:
+    """Safely retrieve a key from coordinator data, returning *default* on failure."""
+    if data is None:
+        return default
+    return data.get(key, default)
 
-    def __init__(self, hass: HomeAssistant, topic_prefix: str, machine_name: str) -> None:
-        """Initialise the coordinator."""
-        self.hass = hass
-        self.topic_prefix = topic_prefix
-        self.machine_name = machine_name
 
-        # Live data store  {subtopic: value}
-        self.data: dict[str, str | None] = {t: None for t in ALL_TOPICS}
-        self.last_update: datetime | None = None
+# ======================================================================
+# Base coordinator
+# ======================================================================
 
-        # Subscriber callbacks  {subtopic: [callback, ...]}
-        self._subscribers: dict[str, list[Callable[[], None]]] = {
-            t: [] for t in ALL_TOPICS
-        }
-        # Catch-all subscribers notified on every update
-        self._global_subscribers: list[Callable[[], None]] = []
+class HaasBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+    """Base class with shared helpers."""
 
-        # MQTT unsubscribe handles
-        self._unsubscribe_handles: list[Callable[[], None]] = []
+    coordinator_key: str  # overridden in subclasses
 
-    # ------------------------------------------------------------------
-    # Subscription management
-    # ------------------------------------------------------------------
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        api: HaasApiClient,
+        name: str,
+        update_interval: timedelta,
+    ) -> None:
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=f"{DOMAIN}_{name}",
+            update_interval=update_interval,
+        )
+        self.api = api
 
-    async def async_subscribe_all(self) -> None:
-        """Subscribe to all MQTT sub-topics."""
-        for subtopic in ALL_TOPICS:
-            full_topic = f"{self.topic_prefix}{subtopic}"
-            _LOGGER.debug("[%s] Subscribing to %s", self.machine_name, full_topic)
+    def get(self, key: str, default: Any = None) -> Any:
+        """Convenience accessor for entity descriptions."""
+        return _safe_get(self.data, key, default)
 
-            # Closure captures the subtopic for each loop iteration
-            async def _handle_message(
-                msg: mqtt.ReceiveMessage, _subtopic: str = subtopic
-            ) -> None:
-                self._handle_mqtt(msg, _subtopic)
 
-            handle = await mqtt.async_subscribe(
-                self.hass, full_topic, _handle_message, qos=0
-            )
-            self._unsubscribe_handles.append(handle)
+# ======================================================================
+# Fast coordinator  (~2 s)
+# ======================================================================
 
-    async def async_unsubscribe_all(self) -> None:
-        """Unsubscribe from all MQTT topics (called on integration unload)."""
-        for handle in self._unsubscribe_handles:
-            handle()
-        self._unsubscribe_handles.clear()
+class HaasFastCoordinator(HaasBaseCoordinator):
+    """Polls positions, spindle, execution state."""
 
-    # ------------------------------------------------------------------
-    # Entity registration
-    # ------------------------------------------------------------------
+    coordinator_key = COORD_FAST
 
-    def register_callback(
-        self, subtopic: str, cb: Callable[[], None]
-    ) -> Callable[[], None]:
-        """Register *cb* to be called when *subtopic* receives a new value.
-
-        Returns an unregister function for use in async_will_remove_from_hass.
-        """
-        self._subscribers.setdefault(subtopic, []).append(cb)
-
-        def _remove() -> None:
-            self._subscribers[subtopic].remove(cb)
-
-        return _remove
-
-    def register_global_callback(self, cb: Callable[[], None]) -> Callable[[], None]:
-        """Register *cb* to be called on every data update."""
-        self._global_subscribers.append(cb)
-
-        def _remove() -> None:
-            self._global_subscribers.remove(cb)
-
-        return _remove
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    @callback
-    def _handle_mqtt(self, msg: mqtt.ReceiveMessage, subtopic: str) -> None:
-        """Handle an incoming MQTT message."""
-        payload = msg.payload
-        if isinstance(payload, bytes):
-            payload = payload.decode("utf-8", errors="replace")
-
-        _LOGGER.debug(
-            "[%s] MQTT %s -> %r", self.machine_name, subtopic, payload
+    def __init__(self, hass: HomeAssistant, api: HaasApiClient, machine: str) -> None:
+        super().__init__(
+            hass, api, f"{machine}_fast",
+            timedelta(seconds=UPDATE_INTERVAL_FAST),
         )
 
-        self.data[subtopic] = payload.strip() if payload else None
-        self.last_update = datetime.now()
+    async def _async_update_data(self) -> dict[str, Any]:
+        try:
+            return await self.api.async_get_fast_data()
+        except Exception as err:
+            raise UpdateFailed(f"Fast data update failed: {err}") from err
 
-        # Notify topic-specific subscribers
-        for cb in list(self._subscribers.get(subtopic, [])):
-            cb()
 
-        # Notify global subscribers
-        for cb in list(self._global_subscribers):
-            cb()
+# ======================================================================
+# Medium coordinator  (~10 s)
+# ======================================================================
 
-    # ------------------------------------------------------------------
-    # Convenience accessors
-    # ------------------------------------------------------------------
+class HaasMediumCoordinator(HaasBaseCoordinator):
+    """Polls tool info, work offset, part count, alarms."""
 
-    def get(self, subtopic: str, default: str | None = None) -> str | None:
-        """Return the current value for *subtopic*."""
-        return self.data.get(subtopic, default)
+    coordinator_key = COORD_MEDIUM
 
-    @property
-    def is_available(self) -> bool:
-        """Return True when the machine reports AVAILABLE."""
-        return self.data.get(TOPIC_AVAIL) == AVAIL_AVAILABLE
+    def __init__(self, hass: HomeAssistant, api: HaasApiClient, machine: str) -> None:
+        super().__init__(
+            hass, api, f"{machine}_medium",
+            timedelta(seconds=UPDATE_INTERVAL_MEDIUM),
+        )
 
-    @property
-    def execution(self) -> str | None:
-        """Return the current execution state."""
-        return self.data.get(TOPIC_EXECUTION)
+    async def _async_update_data(self) -> dict[str, Any]:
+        try:
+            return await self.api.async_get_medium_data()
+        except Exception as err:
+            raise UpdateFailed(f"Medium data update failed: {err}") from err
 
-    @property
-    def program(self) -> str | None:
-        """Return the currently loaded program name."""
-        return self.data.get(TOPIC_PROGRAM)
+
+# ======================================================================
+# Slow coordinator  (~600 s)
+# ======================================================================
+
+class HaasSlowCoordinator(HaasBaseCoordinator):
+    """Polls machine identity and accumulated times.
+
+    Also periodically retries MTConnect if it was down.
+    """
+
+    coordinator_key = COORD_SLOW
+
+    def __init__(self, hass: HomeAssistant, api: HaasApiClient, machine: str) -> None:
+        super().__init__(
+            hass, api, f"{machine}_slow",
+            timedelta(seconds=UPDATE_INTERVAL_SLOW),
+        )
+        self._cycle = 0
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        # Periodically retry MTConnect
+        self._cycle += 1
+        if self._cycle % _MTCONNECT_RETRY_CYCLES == 0:
+            await self.api.async_retry_mtconnect()
+
+        try:
+            return await self.api.async_get_slow_data()
+        except Exception as err:
+            raise UpdateFailed(f"Slow data update failed: {err}") from err

@@ -12,72 +12,71 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntityDescription,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    ATTR_DATA_SOURCE,
     ATTR_LAST_UPDATE,
-    ATTR_TOPIC_PREFIX,
     AVAIL_AVAILABLE,
+    CONF_HOST,
     CONF_MACHINE_NAME,
-    CONF_TOPIC_PREFIX,
+    COORD_FAST,
+    COORD_MEDIUM,
     DEFAULT_MACHINE_NAME,
-    DEFAULT_TOPIC_PREFIX,
     DOMAIN,
-    EXECUTION_ACTIVE,
     EXECUTION_IDLE,
-    TOPIC_ALARM,
-    TOPIC_AVAIL,
-    TOPIC_EXECUTION,
-    UPDATE_GROUP_REALTIME,
+    KEY_ALARM,
+    KEY_AVAIL,
+    KEY_EXECUTION,
 )
-from .coordinator import HaasDataCoordinator
+from .coordinator import HaasBaseCoordinator, _safe_get
 
 _LOGGER = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class HaasBinarySensorEntityDescription(BinarySensorEntityDescription):
-    """Extends BinarySensorEntityDescription with HAAS-specific fields."""
+    """Extends BinarySensorEntityDescription with coordinator binding."""
 
-    subtopic: str = ""
-    update_group: str = UPDATE_GROUP_REALTIME
-    # Returns True/False from raw MQTT payload string
-    is_on_fn: Callable[[str | None], bool] = field(
-        default_factory=lambda: lambda v: bool(v)
-    )
+    coordinator_key: str = COORD_FAST
+    is_on_fn: Callable[[dict[str, Any]], bool | None] = lambda d: None
 
 
-BINARY_SENSOR_DESCRIPTIONS: list[HaasBinarySensorEntityDescription] = [
+BINARY_SENSOR_DESCRIPTIONS: tuple[HaasBinarySensorEntityDescription, ...] = (
     HaasBinarySensorEntityDescription(
         key="available",
-        subtopic=TOPIC_AVAIL,
         name="Machine Available",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
         icon="mdi:lan-connect",
-        update_group=UPDATE_GROUP_REALTIME,
-        is_on_fn=lambda v: v == AVAIL_AVAILABLE,
+        coordinator_key=COORD_FAST,
+        is_on_fn=lambda d: _safe_get(d, KEY_AVAIL) == AVAIL_AVAILABLE,
     ),
     HaasBinarySensorEntityDescription(
         key="running",
-        subtopic=TOPIC_EXECUTION,
         name="Running",
         device_class=BinarySensorDeviceClass.RUNNING,
         icon="mdi:play",
-        update_group=UPDATE_GROUP_REALTIME,
-        is_on_fn=lambda v: v not in (None, EXECUTION_IDLE, "IDLE") and bool(v),
+        coordinator_key=COORD_FAST,
+        is_on_fn=lambda d: (
+            _safe_get(d, KEY_EXECUTION) not in (None, EXECUTION_IDLE, "IDLE", "READY", "STOPPED")
+            and _safe_get(d, KEY_EXECUTION) is not None
+        ),
     ),
     HaasBinarySensorEntityDescription(
         key="alarm_active",
-        subtopic=TOPIC_ALARM,
         name="Alarm Active",
         device_class=BinarySensorDeviceClass.PROBLEM,
         icon="mdi:alarm-light-outline",
-        update_group=UPDATE_GROUP_REALTIME,
-        is_on_fn=lambda v: bool(v) and v.strip() not in ("", "0", "NONE", "CLEAR"),
+        coordinator_key=COORD_MEDIUM,
+        is_on_fn=lambda d: (
+            _safe_get(d, KEY_ALARM) is not None
+            and str(_safe_get(d, KEY_ALARM, "")).strip() not in ("", "NONE", "CLEAR", "NORMAL")
+        ),
     ),
-]
+)
 
 
 async def async_setup_entry(
@@ -86,83 +85,71 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up HAAS CNC binary sensors from a config entry."""
-    coordinator: HaasDataCoordinator = hass.data[DOMAIN][entry.entry_id]
+    entry_data = hass.data[DOMAIN][entry.entry_id]
     machine_name: str = entry.data.get(CONF_MACHINE_NAME, DEFAULT_MACHINE_NAME)
-    topic_prefix: str = entry.data.get(CONF_TOPIC_PREFIX, DEFAULT_TOPIC_PREFIX)
+    host: str = entry.data[CONF_HOST]
+
+    coordinators: dict[str, HaasBaseCoordinator] = {
+        COORD_FAST: entry_data[COORD_FAST],
+        COORD_MEDIUM: entry_data[COORD_MEDIUM],
+    }
 
     entities = [
-        HaasCncBinarySensor(coordinator, description, machine_name, topic_prefix)
-        for description in BINARY_SENSOR_DESCRIPTIONS
+        HaasCncBinarySensor(
+            coordinator=coordinators[desc.coordinator_key],
+            description=desc,
+            machine_name=machine_name,
+            host=host,
+        )
+        for desc in BINARY_SENSOR_DESCRIPTIONS
     ]
     async_add_entities(entities)
 
 
-class HaasCncBinarySensor(BinarySensorEntity):
+class HaasCncBinarySensor(CoordinatorEntity[HaasBaseCoordinator], BinarySensorEntity):
     """Representation of a HAAS CNC binary sensor."""
 
     entity_description: HaasBinarySensorEntityDescription
     _attr_has_entity_name = True
-    _attr_should_poll = False
 
     def __init__(
         self,
-        coordinator: HaasDataCoordinator,
+        coordinator: HaasBaseCoordinator,
         description: HaasBinarySensorEntityDescription,
         machine_name: str,
-        topic_prefix: str,
+        host: str,
     ) -> None:
         """Initialise the binary sensor."""
+        super().__init__(coordinator)
         self.entity_description = description
-        self._coordinator = coordinator
         self._machine_name = machine_name
-        self._topic_prefix = topic_prefix
-        self._unsubscribe: Callable[[], None] | None = None
+        self._host = host
 
-        self._attr_unique_id = (
-            f"{topic_prefix.rstrip('/')}_{description.key}"
-        )
+        self._attr_unique_id = f"{host}_{description.key}"
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, topic_prefix.rstrip("/"))},
+            identifiers={(DOMAIN, host)},
             name=machine_name,
             manufacturer="Haas Automation",
             model="UMC-500",
             sw_version="NGC",
         )
 
-    async def async_added_to_hass(self) -> None:
-        """Register callback."""
-        self._unsubscribe = self._coordinator.register_callback(
-            self.entity_description.subtopic, self._handle_update
-        )
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Remove callback."""
-        if self._unsubscribe:
-            self._unsubscribe()
-
-    @callback
-    def _handle_update(self) -> None:
-        """Push state update to HA."""
-        self.async_write_ha_state()
-
-    @property
-    def available(self) -> bool:
-        """Return availability."""
-        return self._coordinator.data.get(self.entity_description.subtopic) is not None
-
     @property
     def is_on(self) -> bool | None:
-        """Return True when the condition represented is active."""
-        raw = self._coordinator.get(self.entity_description.subtopic)
+        """Return True when the condition is active."""
+        if self.coordinator.data is None:
+            return None
         try:
-            return self.entity_description.is_on_fn(raw)
-        except Exception:  # noqa: BLE001
+            return self.entity_description.is_on_fn(self.coordinator.data)
+        except (KeyError, TypeError, ValueError):
             return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return state attributes."""
-        attrs: dict[str, Any] = {ATTR_TOPIC_PREFIX: self._topic_prefix}
-        if self._coordinator.last_update:
-            attrs[ATTR_LAST_UPDATE] = self._coordinator.last_update.isoformat()
+        attrs: dict[str, Any] = {}
+        if self.coordinator.data:
+            attrs[ATTR_DATA_SOURCE] = self.coordinator.data.get("_source", "unknown")
+        if self.coordinator.last_update_success_time:
+            attrs[ATTR_LAST_UPDATE] = self.coordinator.last_update_success_time.isoformat()
         return attrs

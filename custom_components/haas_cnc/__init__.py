@@ -1,7 +1,8 @@
 """HAAS CNC Machine Monitor – Home Assistant custom integration.
 
-Entry point: sets up the MQTT coordinator, then forwards platform setup
-to sensor and binary_sensor platforms.
+Entry point: creates the unified API client, spins up three
+``DataUpdateCoordinator`` tiers (fast / medium / slow), then
+forwards platform setup to sensor and binary_sensor.
 """
 from __future__ import annotations
 
@@ -11,15 +12,29 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .api import HaasApiClient
 from .const import (
+    CONF_HOST,
     CONF_MACHINE_NAME,
-    CONF_TOPIC_PREFIX,
+    CONF_MDC_PORT,
+    CONF_MTCONNECT_DEVICE,
+    CONF_MTCONNECT_PORT,
+    COORD_FAST,
+    COORD_MEDIUM,
+    COORD_SLOW,
     DEFAULT_MACHINE_NAME,
-    DEFAULT_TOPIC_PREFIX,
+    DEFAULT_MDC_PORT,
+    DEFAULT_MTCONNECT_DEVICE,
+    DEFAULT_MTCONNECT_PORT,
     DOMAIN,
 )
-from .coordinator import HaasDataCoordinator
+from .coordinator import (
+    HaasFastCoordinator,
+    HaasMediumCoordinator,
+    HaasSlowCoordinator,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,30 +43,56 @@ PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BINARY_SENSOR]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HAAS CNC from a config entry."""
-    topic_prefix: str = entry.data.get(CONF_TOPIC_PREFIX, DEFAULT_TOPIC_PREFIX)
+    host: str = entry.data[CONF_HOST]
     machine_name: str = entry.data.get(CONF_MACHINE_NAME, DEFAULT_MACHINE_NAME)
+    mtconnect_port: int = entry.data.get(CONF_MTCONNECT_PORT, DEFAULT_MTCONNECT_PORT)
+    mdc_port: int = entry.data.get(CONF_MDC_PORT, DEFAULT_MDC_PORT)
+    mtconnect_device: str = entry.data.get(CONF_MTCONNECT_DEVICE, DEFAULT_MTCONNECT_DEVICE)
 
-    coordinator = HaasDataCoordinator(hass, topic_prefix, machine_name)
+    session = async_get_clientsession(hass)
+    api = HaasApiClient(
+        host=host,
+        mtconnect_port=mtconnect_port,
+        mdc_port=mdc_port,
+        mtconnect_device=mtconnect_device,
+        session=session,
+    )
 
-    # Subscribe to MQTT topics.  Raises if MQTT is not available.
-    try:
-        await coordinator.async_subscribe_all()
-    except Exception as err:  # noqa: BLE001
+    # Validate connectivity
+    success, source = await api.async_test_connection()
+    if not success:
         raise ConfigEntryNotReady(
-            f"Unable to subscribe to MQTT topics for {machine_name}: {err}"
-        ) from err
+            f"Cannot reach HAAS machine at {host} "
+            f"(tried MTConnect :{mtconnect_port} and MDC :{mdc_port})"
+        )
+    _LOGGER.info(
+        "Connected to %s at %s via %s", machine_name, host, source,
+    )
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    # Create coordinator tiers
+    fast_coord = HaasFastCoordinator(hass, api, machine_name)
+    medium_coord = HaasMediumCoordinator(hass, api, machine_name)
+    slow_coord = HaasSlowCoordinator(hass, api, machine_name)
+
+    # Initial refresh – raises UpdateFailed → ConfigEntryNotReady
+    await fast_coord.async_config_entry_first_refresh()
+    await medium_coord.async_config_entry_first_refresh()
+    await slow_coord.async_config_entry_first_refresh()
+
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        "api": api,
+        COORD_FAST: fast_coord,
+        COORD_MEDIUM: medium_coord,
+        COORD_SLOW: slow_coord,
+    }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Support options updates (e.g. changing topic prefix via the UI)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     _LOGGER.info(
-        "HAAS CNC integration loaded – machine: %s, prefix: %s",
-        machine_name,
-        topic_prefix,
+        "HAAS CNC integration loaded – machine: %s, host: %s, source: %s",
+        machine_name, host, source,
     )
     return True
 
@@ -59,8 +100,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        coordinator: HaasDataCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
-        await coordinator.async_unsubscribe_all()
+        entry_data = hass.data[DOMAIN].pop(entry.entry_id)
+        api: HaasApiClient = entry_data["api"]
+        await api.close()
 
     return unload_ok
 
